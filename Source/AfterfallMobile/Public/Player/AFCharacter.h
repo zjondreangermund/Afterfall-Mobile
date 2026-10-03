@@ -7,6 +7,7 @@
 class UCameraComponent;
 class USpringArmComponent;
 class UAFHealthComponent;
+class UAFInventoryComponent;
 
 UCLASS()
 class AFTERFALLMOBILE_API AAFCharacter : public ACharacter
@@ -41,6 +42,9 @@ public:
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Health")
     TObjectPtr<UAFHealthComponent> HealthComponent;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Inventory")
+    TObjectPtr<UAFInventoryComponent> InventoryComponent;
 
 protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Combat", meta=(ClampMin="1.0"))
