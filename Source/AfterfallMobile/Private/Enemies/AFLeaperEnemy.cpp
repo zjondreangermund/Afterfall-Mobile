@@ -23,6 +23,7 @@ namespace AFLeaperWeakPoints
 AAFLeaperEnemy::AAFLeaperEnemy()
 {
     EnemyId = TEXT("Leaper");
+    WeakPointLootClass = AAFLootPickup::StaticClass();
 
     // Let weapon visibility traces reach the skeletal mesh / weak-point hitboxes
     // instead of being swallowed by the character capsule.
