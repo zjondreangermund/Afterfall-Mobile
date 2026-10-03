@@ -242,10 +242,9 @@ for frame in (1, 30):
     for name in pose_bones:
         key_bone(name, frame)
 
-for fc in action.fcurves:
-    for kp in fc.keyframe_points:
-        kp.interpolation = 'CONSTANT'
-
+# Blender 5.2 uses the layered Action API; the legacy action.fcurves
+# collection is no longer available here. Both keyframes hold the same pose,
+# so the stance remains visually static without forcing interpolation.
 scene.frame_start = 1
 scene.frame_end = 30
 scene.frame_set(1)
