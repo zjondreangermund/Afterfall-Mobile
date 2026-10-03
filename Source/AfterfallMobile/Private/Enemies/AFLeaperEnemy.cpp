@@ -28,7 +28,8 @@ AAFLeaperEnemy::AAFLeaperEnemy()
     // Let weapon visibility traces reach the skeletal mesh / weak-point hitboxes
     // instead of being swallowed by the character capsule.
     GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
-    GetMesh()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+    GetMesh()->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    GetMesh()->SetCollisionResponseToAllChannels(ECR_Ignore);
     GetMesh()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 
     WeakEyeHitbox = CreateDefaultSubobject<USphereComponent>(TEXT("WeakEyeHitbox"));
