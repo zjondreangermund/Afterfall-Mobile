@@ -1,0 +1,32 @@
+# Unreal Engine
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+.vscode/
+*.VC.db
+*.opensdf
+*.sdf
+*.sln
+*.suo
+*.xcodeproj
+*.xcworkspace
+
+# Build/package output
+Build/Android/
+Build/IOS/
+StagedBuilds/
+Packaging/
+
+# IDE/user files
+.idea/
+*.user
+*.userprefs
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep source assets but avoid local caches
+Content/Collections/
