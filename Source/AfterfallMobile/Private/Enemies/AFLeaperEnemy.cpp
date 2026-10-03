@@ -140,6 +140,7 @@ void AAFLeaperEnemy::BeginPlay()
 
     InitializeWeakPoints();
     FindImportedHelperMaterials();
+    SetAlertState(EAFLeaperAlertState::Scanning);
 }
 
 void AAFLeaperEnemy::InitializeWeakPoints()
@@ -190,6 +191,76 @@ void AAFLeaperEnemy::FindImportedHelperMaterials()
         {
             HitFlashWeakPointMaterial = Material;
         }
+
+        if (!ScanningSignalMaterial &&
+            MaterialName.Contains(TEXT("LEAP_SIGNAL_Scan_White")))
+        {
+            ScanningSignalMaterial = Material;
+        }
+
+        if (!AlertSignalMaterial &&
+            MaterialName.Contains(TEXT("LEAP_SIGNAL_Alert_Yellow")))
+        {
+            AlertSignalMaterial = Material;
+        }
+
+        if (!AttackSignalMaterial &&
+            MaterialName.Contains(TEXT("LEAP_SIGNAL_Attack_Red")))
+        {
+            AttackSignalMaterial = Material;
+        }
+    }
+}
+
+void AAFLeaperEnemy::SetAlertState(EAFLeaperAlertState NewState)
+{
+    if (AlertState == NewState)
+    {
+        ApplyAlertMaterial();
+        return;
+    }
+
+    AlertState = NewState;
+    ApplyAlertMaterial();
+    OnAlertStateChanged.Broadcast(AlertState);
+}
+
+void AAFLeaperEnemy::ApplyAlertMaterial()
+{
+    if (!GetMesh() || SignalMaterialSlot.IsNone())
+    {
+        return;
+    }
+
+    const int32 MaterialIndex = GetMesh()->GetMaterialIndex(SignalMaterialSlot);
+    if (MaterialIndex == INDEX_NONE)
+    {
+        return;
+    }
+
+    UMaterialInterface* DesiredMaterial = nullptr;
+
+    switch (AlertState)
+    {
+        case EAFLeaperAlertState::Scanning:
+            DesiredMaterial = ScanningSignalMaterial;
+            break;
+
+        case EAFLeaperAlertState::Alert:
+            DesiredMaterial = AlertSignalMaterial;
+            break;
+
+        case EAFLeaperAlertState::Attacking:
+            DesiredMaterial = AttackSignalMaterial;
+            break;
+
+        default:
+            break;
+    }
+
+    if (DesiredMaterial)
+    {
+        GetMesh()->SetMaterial(MaterialIndex, DesiredMaterial);
     }
 }
 
@@ -223,6 +294,11 @@ float AAFLeaperEnemy::TakeDamage(
                 FinalDamage *= FMath::Max(1.0f, Definition->DamageMultiplier);
             }
         }
+    }
+
+    if (FinalDamage > 0.0f && AlertState == EAFLeaperAlertState::Scanning)
+    {
+        SetAlertState(EAFLeaperAlertState::Alert);
     }
 
     return Super::TakeDamage(
@@ -574,6 +650,7 @@ bool AAFLeaperEnemy::TryPounceAt(AActor* TargetActor)
     LaunchVelocity.Z -= 0.5f * GravityZ * FlightTime;
 
     bPounceInProgress = true;
+    SetAlertState(EAFLeaperAlertState::Attacking);
     GetCharacterMovement()->SetMovementMode(MOVE_Falling);
     LaunchCharacter(LaunchVelocity, true, true);
     return true;
@@ -589,6 +666,7 @@ void AAFLeaperEnemy::Landed(const FHitResult& Hit)
     }
 
     bPounceInProgress = false;
+    SetAlertState(EAFLeaperAlertState::Alert);
 
     UGameplayStatics::ApplyRadialDamage(
         this,
