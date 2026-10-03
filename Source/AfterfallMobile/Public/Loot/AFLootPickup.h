@@ -17,6 +17,18 @@ public:
     UFUNCTION(BlueprintCallable, Category="Afterfall|Loot")
     bool Collect(AActor* Collector);
 
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Loot")
+    void ConfigureLoot(FName NewItemId, int32 NewQuantity = 1);
+
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Loot")
+    void DropWithImpulse(FVector Impulse);
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Loot")
+    FName GetItemId() const { return ItemId; }
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Loot")
+    int32 GetQuantity() const { return Quantity; }
+
 protected:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Loot")
     TObjectPtr<UStaticMeshComponent> Mesh;
