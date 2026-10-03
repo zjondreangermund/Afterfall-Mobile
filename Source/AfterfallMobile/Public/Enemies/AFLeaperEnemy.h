@@ -9,6 +9,14 @@ class AAFLootPickup;
 class UMaterialInterface;
 class USphereComponent;
 
+UENUM(BlueprintType)
+enum class EAFLeaperAlertState : uint8
+{
+    Scanning UMETA(DisplayName="Scanning"),
+    Alert UMETA(DisplayName="Alert"),
+    Attacking UMETA(DisplayName="Attacking")
+};
+
 USTRUCT(BlueprintType)
 struct FAFLeaperWeakPointDefinition
 {
@@ -76,6 +84,11 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
     FVector,
     WorldLocation);
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+    FAFOnLeaperAlertStateChanged,
+    EAFLeaperAlertState,
+    NewState);
+
 UCLASS()
 class AFTERFALLMOBILE_API AAFLeaperEnemy : public AAFEnemyBase
 {
@@ -92,6 +105,15 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper")
     bool TryPounceAt(AActor* TargetActor);
+
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper|Alert")
+    void SetAlertState(EAFLeaperAlertState NewState);
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Alert")
+    EAFLeaperAlertState GetAlertState() const { return AlertState; }
+
+    UPROPERTY(BlueprintAssignable, Category="Afterfall|Leaper|Alert")
+    FAFOnLeaperAlertStateChanged OnAlertStateChanged;
 
     UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper|Weak Points")
     bool ApplyWeakPointDamage(FName WeakPointId, float DamageAmount, FVector HitLocation);
@@ -163,8 +185,23 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points|Loot")
     TSubclassOf<AAFLootPickup> WeakPointLootClass;
 
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Visuals")
+    FName SignalMaterialSlot = TEXT("LEAP_SIGNAL_Scan_White");
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Visuals")
+    TObjectPtr<UMaterialInterface> ScanningSignalMaterial;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Visuals")
+    TObjectPtr<UMaterialInterface> AlertSignalMaterial;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Visuals")
+    TObjectPtr<UMaterialInterface> AttackSignalMaterial;
+
 private:
     bool bPounceInProgress = false;
+
+    UPROPERTY(VisibleInstanceOnly, Category="Afterfall|Leaper|Alert")
+    EAFLeaperAlertState AlertState = EAFLeaperAlertState::Scanning;
 
     UPROPERTY(VisibleInstanceOnly, Category="Afterfall|Leaper|Weak Points")
     TMap<FName, FAFLeaperWeakPointState> WeakPointStates;
@@ -178,6 +215,7 @@ private:
 
     void InitializeWeakPoints();
     void FindImportedHelperMaterials();
+    void ApplyAlertMaterial();
 
     FName ResolveWeakPointId(const FHitResult& HitInfo) const;
     const FAFLeaperWeakPointDefinition* FindWeakPointDefinition(FName WeakPointId) const;
