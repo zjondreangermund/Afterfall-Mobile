@@ -4,6 +4,77 @@
 #include "Enemies/AFEnemyBase.h"
 #include "AFLeaperEnemy.generated.h"
 
+class AAFLootPickup;
+class UMaterialInterface;
+class USphereComponent;
+
+USTRUCT(BlueprintType)
+struct FAFLeaperWeakPointDefinition
+{
+    GENERATED_BODY()
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    FName Id = NAME_None;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    FName HitBone = NAME_None;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    FName CoverBone = NAME_None;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    FName MaterialSlot = NAME_None;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points", meta=(ClampMin="1.0"))
+    float MaxHealth = 30.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points", meta=(ClampMin="1.0"))
+    float DamageMultiplier = 2.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    FName LootItemId = TEXT("LeaperArmorPlate");
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points", meta=(ClampMin="1"))
+    int32 LootQuantity = 1;
+};
+
+USTRUCT(BlueprintType)
+struct FAFLeaperWeakPointState
+{
+    GENERATED_BODY()
+
+    UPROPERTY(BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    float CurrentHealth = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    float MaxHealth = 0.0f;
+
+    UPROPERTY(BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    bool bDiscovered = false;
+
+    UPROPERTY(BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    bool bBroken = false;
+};
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
+    FAFOnLeaperWeakPointDiscovered,
+    FName,
+    WeakPointId);
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+    FAFOnLeaperWeakPointHit,
+    FName,
+    WeakPointId,
+    float,
+    NormalizedHealth);
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+    FAFOnLeaperWeakPointBroken,
+    FName,
+    WeakPointId,
+    FVector,
+    WorldLocation);
+
 UCLASS()
 class AFTERFALLMOBILE_API AAFLeaperEnemy : public AAFEnemyBase
 {
@@ -12,10 +83,38 @@ class AFTERFALLMOBILE_API AAFLeaperEnemy : public AAFEnemyBase
 public:
     AAFLeaperEnemy();
 
+    virtual float TakeDamage(
+        float DamageAmount,
+        struct FDamageEvent const& DamageEvent,
+        class AController* EventInstigator,
+        AActor* DamageCauser) override;
+
     UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper")
     bool TryPounceAt(AActor* TargetActor);
 
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper|Weak Points")
+    bool ApplyWeakPointDamage(FName WeakPointId, float DamageAmount, FVector HitLocation);
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Weak Points")
+    bool IsWeakPointDiscovered(FName WeakPointId) const;
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Weak Points")
+    bool IsWeakPointBroken(FName WeakPointId) const;
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Weak Points")
+    bool GetWeakPointState(FName WeakPointId, FAFLeaperWeakPointState& OutState) const;
+
+    UPROPERTY(BlueprintAssignable, Category="Afterfall|Leaper|Weak Points")
+    FAFOnLeaperWeakPointDiscovered OnWeakPointDiscovered;
+
+    UPROPERTY(BlueprintAssignable, Category="Afterfall|Leaper|Weak Points")
+    FAFOnLeaperWeakPointHit OnWeakPointHit;
+
+    UPROPERTY(BlueprintAssignable, Category="Afterfall|Leaper|Weak Points")
+    FAFOnLeaperWeakPointBroken OnWeakPointBroken;
+
 protected:
+    virtual void BeginPlay() override;
     virtual void Landed(const FHitResult& Hit) override;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper")
@@ -33,6 +132,59 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper")
     float LandingDamageRadius = 260.0f;
 
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    TObjectPtr<USphereComponent> WeakEyeHitbox;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    TObjectPtr<USphereComponent> WeakFrontLeftHitbox;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    TObjectPtr<USphereComponent> WeakFrontRightHitbox;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    TObjectPtr<USphereComponent> WeakRearLeftHitbox;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    TObjectPtr<USphereComponent> WeakRearRightHitbox;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points")
+    TArray<FAFLeaperWeakPointDefinition> WeakPointDefinitions;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points|Visuals")
+    TObjectPtr<UMaterialInterface> DiscoveredWeakPointMaterial;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points|Visuals")
+    TObjectPtr<UMaterialInterface> HitFlashWeakPointMaterial;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points|Visuals", meta=(ClampMin="0.01"))
+    float WeakPointHitFlashDuration = 0.12f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Weak Points|Loot")
+    TSubclassOf<AAFLootPickup> WeakPointLootClass;
+
 private:
     bool bPounceInProgress = false;
+
+    UPROPERTY(VisibleInstanceOnly, Category="Afterfall|Leaper|Weak Points")
+    TMap<FName, FAFLeaperWeakPointState> WeakPointStates;
+
+    TMap<FName, FTimerHandle> WeakPointFlashTimers;
+
+    void ConfigureWeakPointHitbox(
+        USphereComponent* Hitbox,
+        FName BoneName,
+        float Radius);
+
+    void InitializeWeakPoints();
+    void FindImportedHelperMaterials();
+
+    FName ResolveWeakPointId(const FHitResult& HitInfo) const;
+    const FAFLeaperWeakPointDefinition* FindWeakPointDefinition(FName WeakPointId) const;
+    USphereComponent* FindWeakPointHitbox(FName WeakPointId) const;
+
+    void SetWeakPointMaterial(FName WeakPointId, UMaterialInterface* Material);
+    void BeginWeakPointFlash(FName WeakPointId);
+    void EndWeakPointFlash(FName WeakPointId);
+    void BreakWeakPoint(FName WeakPointId, FVector HitLocation);
+    void SpawnWeakPointLoot(const FAFLeaperWeakPointDefinition& Definition, FVector HitLocation);
 };
