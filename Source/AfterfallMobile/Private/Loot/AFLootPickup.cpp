@@ -1,7 +1,7 @@
 #include "Loot/AFLootPickup.h"
 
 #include "Components/StaticMeshComponent.h"
-#include "Inventory/AFInventoryComponent.h"
+#include "Inventory/AFInventoryComponent.h"\n#include "Engine/StaticMesh.h"\n#include "UObject/ConstructorHelpers.h"
 
 AAFLootPickup::AAFLootPickup()
 {
