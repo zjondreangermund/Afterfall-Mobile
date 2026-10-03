@@ -1,6 +1,6 @@
-# Robot Enemy V0.1 Specifications
+# Enemy V0.1 Specifications
 
-The current concept sheet is reference for role and mood only. Final production meshes must be original.
+The current concept material is reference for role and mood only. Final production meshes must be original.
 
 ## Scout Drone
 **Role:** reconnaissance / harassment
@@ -21,24 +21,47 @@ The current concept sheet is reference for role and mood only. Final production 
 - Weak point: exposed sensor module.
 - Damaging a leg reduces movement speed.
 
-## Leaper
-**Role:** ambush / pounce
+## Gun Platform — current six-legged Blender robot
+**Working role:** mobile ranged suppression / area control
 
-This is the signature V0.1 enemy.
+The six-legged robot we have already modelled is no longer the jumping enemy.
+
+Design direction:
+- Twin shoulder/autocannon weapon mounts.
+- Alternating left/right burst fire.
+- Slow-to-medium movement with a wide, planted firing stance.
+- Uses cover lanes and suppresses open ground rather than pouncing.
+- Can brace before firing a heavier burst.
+- Weapon housings, sensor cluster and selected leg joints can be destructible weak points.
+- Destroying one gun reduces burst output.
+- Damaging front legs reduces turning/aim stability.
+- Current Blender body and rig remain useful; the jump animation work is retained as R&D/reference only.
+- C++ class: `AAFGunnerEnemy`.
+
+## Leaper — new elongated freaky creature
+**Role:** ambush / pounce / panic enemy
+
+The jump logic now belongs to a separate creature with a much more disturbing silhouette.
+
+Visual direction:
+- Long, low body — closer to a machine-centipede / stretched predator than a normal robot.
+- Long articulated limbs with unusual proportions.
+- Smaller armored head and a deep sensor/mouth cavity.
+- Rear body compresses like a spring before launching.
+- Able to cling to wreckage, crawl through narrow spaces and suddenly cross large gaps.
+- Fast, twitchy ground movement between pounces.
+- Designed to look wrong/uncomfortable even while standing still.
 
 State flow:
-**Stalk → Line up → Compress legs → Landing warning → Pounce → Impact → Recovery**
+**Hide/Stalk → Track → Telegraph → Compress → Long Pounce → Impact → Recovery**
 
 Rules:
 - Pounces only inside configured min/max range.
-- Player gets a short ground warning before impact.
+- Player gets a short but readable landing warning.
 - Landing causes radial damage/stagger.
-- Rear jump actuators are destructible weak points.
-- Destroying one actuator reduces pounce range.
-- Destroying both removes long pounces and forces ground pursuit.
-- Missed pounce creates a short punish window.
-
-The initial C++ class already contains the ballistic pounce and radial landing damage foundation.
+- Missed pounce creates a punish window.
+- Damaging rear mobility organs/actuators can reduce pounce range.
+- The existing `AAFLeaperEnemy` C++ class remains the gameplay foundation for this new creature.
 
 ## Bastion
 **Role:** siege / area denial
