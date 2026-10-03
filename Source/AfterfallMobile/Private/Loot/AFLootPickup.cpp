@@ -1,7 +1,9 @@
 #include "Loot/AFLootPickup.h"
 
 #include "Components/StaticMeshComponent.h"
-#include "Inventory/AFInventoryComponent.h"\n#include "Engine/StaticMesh.h"\n#include "UObject/ConstructorHelpers.h"
+#include "Engine/StaticMesh.h"
+#include "Inventory/AFInventoryComponent.h"
+#include "UObject/ConstructorHelpers.h"
 
 AAFLootPickup::AAFLootPickup()
 {
@@ -9,6 +11,15 @@ AAFLootPickup::AAFLootPickup()
 
     Mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Mesh"));
     SetRootComponent(Mesh);
+
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> DefaultArmorShard(
+        TEXT("/Engine/BasicShapes/Cube.Cube"));
+
+    if (DefaultArmorShard.Succeeded())
+    {
+        Mesh->SetStaticMesh(DefaultArmorShard.Object);
+        Mesh->SetRelativeScale3D(FVector(0.18f, 0.10f, 0.045f));
+    }
 
     Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     Mesh->SetCollisionResponseToAllChannels(ECR_Ignore);
