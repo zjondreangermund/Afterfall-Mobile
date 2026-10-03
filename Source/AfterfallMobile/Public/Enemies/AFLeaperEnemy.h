@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "TimerManager.h"
 #include "Enemies/AFEnemyBase.h"
 #include "AFLeaperEnemy.generated.h"
 
