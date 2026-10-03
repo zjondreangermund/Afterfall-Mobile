@@ -164,7 +164,9 @@ M_DISCOVERED = make_mat("LEAP_WP_Discovered_PaleYellow",(0.72,0.62,0.30),0.18,0.
 M_HIT = make_mat("LEAP_WP_Hit_WhiteYellow",(0.98,0.90,0.58),0.08,0.16,(1.0,0.90,0.50),9.0)
 
 for leg in ("FL","FR","RL","RR"):
-    set_mat(obj(f"{leg}_KneeRing"),M_GRAPHITE)
+    old_ring = obj(f"{leg}_KneeRing")
+    if old_ring:
+        bpy.data.objects.remove(old_ring, do_unlink=True)
 
 set_mat(obj("WeakPort_L"),M_GRAPHITE)
 set_mat(obj("WeakPort_R"),M_GRAPHITE)
