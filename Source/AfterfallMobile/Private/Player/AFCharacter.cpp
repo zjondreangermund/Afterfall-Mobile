@@ -3,6 +3,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/AFHealthComponent.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "Inventory/AFInventoryComponent.h"
 #include "Kismet/GameplayStatics.h"
 
 AAFCharacter::AAFCharacter()
@@ -23,6 +24,7 @@ AAFCharacter::AAFCharacter()
     FollowCamera->bUsePawnControlRotation = false;
 
     HealthComponent = CreateDefaultSubobject<UAFHealthComponent>(TEXT("HealthComponent"));
+    InventoryComponent = CreateDefaultSubobject<UAFInventoryComponent>(TEXT("InventoryComponent"));
 }
 
 void AAFCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
