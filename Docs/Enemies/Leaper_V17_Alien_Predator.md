@@ -1,5 +1,8 @@
 # Leaper V1.7 — alien predator face
 
+For the centered, animated version, apply the [V1.8 motion patch](Leaper_V18_Centered_Motion.md)
+after this pass. Existing V1.7 scenes can run V1.8 directly.
+
 The head now has an elongated armored cranium, swept brow blades, temple gills,
 four hooked mandibles and a pointed lower keel. The circular sensor remains the
 focal point inside the skull. This is an original machine-creature design.

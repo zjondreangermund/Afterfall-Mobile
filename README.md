@@ -40,3 +40,7 @@ See:
 
 The alien predator face pass is `Tools/Blender/afterfall_leaper_v17_alien_predator_face.py`.
 Run it in the existing final Blender scene. See [setup and export](Docs/Enemies/Leaper_V17_Alien_Predator.md).
+
+For centering and moving mandibles, run `Tools/Blender/afterfall_leaper_v18_centered_mandible_motion.py`
+on the existing V1.7 scene. Press Space over the 3D view to play the facial loop.
+See [V1.8 motion and export](Docs/Enemies/Leaper_V18_Centered_Motion.md).

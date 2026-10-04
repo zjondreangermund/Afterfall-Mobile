@@ -34,6 +34,11 @@ All five use:
 
 This means the face looks like several angular armor plates, but Unreal still treats them as one Eye weak-point assembly.
 
+With the [V1.8 motion patch](Enemies/Leaper_V18_Centered_Motion.md), each mandible
+is weighted to a separate `cover_eye_mandible_*` child bone under `cover_eye`.
+The lower keel stays on `cover_eye`. The existing bone-prefix hit lookup and
+parent cover-bone hiding continue to identify and remove the full Eye assembly.
+
 The circular eye ring is **not** the breakable armor. It is the AI state light:
 
 - scan = white
