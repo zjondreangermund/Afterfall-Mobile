@@ -17,17 +17,17 @@ Base weak-point setup:
 
 `Tools/Blender/afterfall_leaper_v13_breakable_weakpoints.py`
 
-Current approved face treatment:
+Current face treatment:
 
-`Tools/Blender/afterfall_leaper_v16d_reference_face.py`
+`Tools/Blender/afterfall_leaper_v17_alien_predator_face.py`
 
-The V1.6D face replaces the old exposed eye arc with three integrated armor pieces:
+The V1.7 face uses five integrated breakable pieces:
 
-- `V16D_WP_Eye_Left`
-- `V16D_WP_Eye_Right`
-- `V16D_WP_Eye_Chin`
+- `V17_UpperMandible_L` / `V17_UpperMandible_R`
+- `V17_LowerMandible_L` / `V17_LowerMandible_R`
+- `V17_WP_Eye_Keel`
 
-All three use:
+All five use:
 
 - gameplay cover bone: `cover_eye`
 - dormant material slot: `LEAP_WP_Eye_Grey`
@@ -105,7 +105,7 @@ Runtime item IDs include:
 - `LeaperActuatorPlate`
 - `LeaperJumpActuator`
 
-For the face, the loot should visually resemble one of the angular U-shaped sensor-armor plates from the approved V1.6D design.
+For the face, the loot should visually resemble one of the hooked sensor-armor mandibles from the V1.7 design.
 
 ## Mobile notes
 

@@ -35,3 +35,8 @@ See:
 - `Docs/GAMEPLAY_V0_1.md`
 - `Docs/ENEMIES_V0_1.md`
 - `Docs/MOBILE_TARGET.md`
+
+## Current Leaper face
+
+The alien predator face pass is `Tools/Blender/afterfall_leaper_v17_alien_predator_face.py`.
+Run it in the existing final Blender scene. See [setup and export](Docs/Enemies/Leaper_V17_Alien_Predator.md).

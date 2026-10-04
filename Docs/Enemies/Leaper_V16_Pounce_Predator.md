@@ -1,25 +1,33 @@
-# Leaper V1.6 — Pounce Predator
+# Leaper — Pounce Predator with V1.7 alien face
 
-This is the locked visual direction for the standard Leaper enemy.
+This is the current procedural visual direction for the standard Leaper enemy.
 
 ## Blender source pass
 
-Build the current model in this order:
+Open the existing `Leaper_Standard_Final.blend` (final rig `ARM_Leaper_Final`).
+For a scene already using V1.6F, run **only**:
 
-1. `Tools/Blender/afterfall_leaper_v13_breakable_weakpoints.py`
-2. `Tools/Blender/afterfall_leaper_v16_pounce_predator.py`
-3. `Tools/Blender/afterfall_leaper_v16d_reference_face.py` ← current approved face
+`Tools/Blender/afterfall_leaper_v17_alien_predator_face.py`
 
-The V1.6D face pass replaces the earlier V1.6B/V1.6C experimental face shell and matches the approved reference:
+The V1.7 pass replaces the visible face. It does not rebuild the body or legs.
+Earlier V1.6B–F face passes are historical alternatives, not a required sequence.
+For an older final-rig scene, run the V1.3 weak-point pass first if its cover bones
+are missing, then V1.6 for the crouched stance if wanted, and V1.7 last.
 
-- low-hanging circular eye/sensor below the chassis;
-- sharp split brow and angular cheek armor;
-- a broken circular state-light ring around the sensor;
-- no friendly camera-lens look;
-- no loose glowing weak-point ring;
-- integrated U-shaped lower face armor around the eye;
-- short lower chin spikes;
-- black/graphite armor with dark mechanical internals.
+The alien predator shape uses:
+
+- an elongated, tapered carapace with a raised central ridge;
+- swept brows and layered temple gills;
+- four hooked, tapering mandibles around an inset circular sensor;
+- a pointed lower armor keel and recessed mechanical jaw;
+- black/graphite armor, with dormant grey breakable mouthparts.
+
+The previous face passes left original head housings/brows in the scene, which
+could dominate the new silhouette. V1.7 hides those original rigid head parts as
+well as the V1.6B–F layers, while keeping them recoverable in the Outliner.
+Mixed body/head meshes and unrelated scene objects are preserved.
+
+See [V1.7 setup and export](Leaper_V17_Alien_Predator.md) for exact steps.
 
 ## Gameplay visual rules
 
@@ -41,14 +49,14 @@ The Blender file exports the ring in the scanning-white slot so `AAFLeaperEnemy`
 
 ### Face weak point
 
-The Eye weak point is now visually represented by the integrated lower U-shaped armor pieces around the circular sensor.
+The Eye weak point is now visually represented by the four integrated mandibles and lower keel around the circular sensor.
 
 - Dormant: matte graphite/grey
 - First successful hit: pale whitish-yellow
 - Later hit: short white-yellow flash
 - Broken: the `cover_eye` armor assembly disappears and loot is spawned
 
-The V1.6D face pieces remain compatible with the existing runtime definition:
+The V1.7 face pieces remain compatible with the existing runtime definition:
 
 - weak bone: `weak_eye`
 - cover bone: `cover_eye`
@@ -71,7 +79,7 @@ Existing runtime weak-point IDs remain unchanged:
 
 `AAFLeaperEnemy` hides the matching cover bone when a weak point breaks and spawns the configured loot pickup.
 
-For the face, the V1.6D left/right/chin eye-armor pieces are all skinned to `cover_eye`, so they break away as one gameplay weak-point assembly even though visually they read as several armored plates.
+For the face, the V1.7 four mandibles and eye-armor keel are all skinned to `cover_eye`, so they break away as one gameplay weak-point assembly even though visually they read as several armored plates.
 
 Blueprint/VFX can use `OnWeakPointBroken` for:
 
@@ -86,7 +94,7 @@ Blueprint/VFX can use `OnWeakPointBroken` for:
 The enemy should read as a machine predator rather than a spider toy:
 
 - compact armored core;
-- head suspended low below the body;
+- head tucked below the thorax, with an elongated rear skull;
 - long, powerful legs;
 - low crouch;
 - wide pounce stance;

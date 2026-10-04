@@ -30,3 +30,7 @@ Thumbs.db
 
 # Keep source assets but avoid local caches
 Content/Collections/
+
+# Blender script validation
+__pycache__/
+*.pyc
