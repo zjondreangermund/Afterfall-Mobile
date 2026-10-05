@@ -23,15 +23,16 @@ LEGACY_NAMES = {
 
 # Existing gameplay slot names are deliberately unchanged.
 MATERIALS = {
-    "shell": ("LEAP_V17_Obsidian", (0.018, 0.023, 0.030), 0.78, 0.31, 0.0),
-    "edge": ("LEAP_V17_CarapaceEdge", (0.065, 0.079, 0.095), 0.82, 0.29, 0.0),
-    "mech": ("LEAP_V17_InnerMechanism", (0.009, 0.012, 0.017), 0.67, 0.38, 0.0),
-    "eye": ("LEAP_WP_Eye_Grey", (0.095, 0.102, 0.110), 0.80, 0.31, 0.0),
-    "scan": ("LEAP_SIGNAL_Scan_White", (1.0, 0.92, 0.72), 0.04, 0.18, 5.0),
-    "alert": ("LEAP_SIGNAL_Alert_Yellow", (1.0, 0.44, 0.01), 0.04, 0.18, 7.0),
-    "attack": ("LEAP_SIGNAL_Attack_Red", (1.0, 0.025, 0.012), 0.04, 0.18, 9.0),
-    "discovered": ("LEAP_WP_Discovered_PaleYellow", (1.0, 0.84, 0.46), 0.12, 0.21, 4.0),
-    "hit": ("LEAP_WP_Hit_WhiteYellow", (1.0, 0.95, 0.60), 0.06, 0.16, 10.0),
+    # Industrial robot palette: metal first, not flat black.
+    "shell": ("LEAP_V17_Obsidian", (0.145, 0.165, 0.185), 0.92, 0.38, 0.0),
+    "edge": ("LEAP_V17_CarapaceEdge", (0.285, 0.315, 0.345), 0.96, 0.29, 0.0),
+    "mech": ("LEAP_V17_InnerMechanism", (0.075, 0.088, 0.102), 0.94, 0.42, 0.0),
+    "eye": ("LEAP_WP_Eye_Grey", (0.260, 0.285, 0.310), 0.88, 0.30, 0.0),
+    "scan": ("LEAP_SIGNAL_Scan_White", (0.82, 0.88, 0.95), 0.08, 0.16, 6.0),
+    "alert": ("LEAP_SIGNAL_Alert_Yellow", (0.95, 0.55, 0.04), 0.08, 0.16, 8.0),
+    "attack": ("LEAP_SIGNAL_Attack_Red", (0.80, 0.025, 0.012), 0.08, 0.15, 10.0),
+    "discovered": ("LEAP_WP_Discovered_PaleYellow", (0.78, 0.70, 0.38), 0.18, 0.20, 5.0),
+    "hit": ("LEAP_WP_Hit_WhiteYellow", (0.98, 0.92, 0.58), 0.12, 0.14, 12.0),
 }
 
 
@@ -355,7 +356,9 @@ def apply_face():
             o.data.name = name+"_Mesh"
         root["V17_FaceRadius"] = radius
         root["FaceRefitVersion"] = VERSION
-        root["FaceDesign"] = "Elongated carapace, swept brows, four hooked mandibles, recessed circular sensor."
+        root["FaceDesign"] = "Elongated dark-titanium carapace, brushed-steel edges, four hooked mandibles, recessed circular sensor."
+        root["MachineMaterialStandard"] = "Industrial Titanium / Steel"
+        root["MachineMaterialPaletteVersion"] = "1.0"
         root["EyeWeakPoint"] = "V17 mandibles and eye keel: cover_eye / LEAP_WP_Eye_Grey."
         root["SignalStateRule"] = "Scanning white; Alert yellow; Attacking red."
         root["FaceCircleRule"] = "The sensor is circular; the skull and jaw have an angular alien silhouette."
