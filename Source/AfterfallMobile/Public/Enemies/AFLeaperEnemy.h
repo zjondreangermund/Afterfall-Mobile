@@ -7,6 +7,7 @@
 
 class AAFLootPickup;
 class UMaterialInterface;
+class UAnimationAsset;
 class USphereComponent;
 
 UENUM(BlueprintType)
@@ -174,6 +175,18 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
     float HearingMemoryDuration = 3.5f;
 
+    /** While white/scanning, distant stationary players are intentionally harder to notice. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float MovementDetectionSpeed = 35.0f;
+
+    /** Inside this range the Leaper can notice a player even if they freeze. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float CloseVisualDetectionRange = 450.0f;
+
+    /** Continuous visual confirmation required before yellow becomes red/attack. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float TargetConfirmationTime = 0.55f;
+
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
     float AlertMemoryDuration = 5.0f;
 
@@ -199,6 +212,67 @@ protected:
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="-1.0", ClampMax="1.0"))
     float HeadPitchSign = 1.0f;
+
+    /** Independent white-state predator scan while the body crawls. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0", ClampMax="120.0"))
+    float ScanningHeadYaw = 58.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0", ClampMax="45.0"))
+    float ScanningHeadPitch = 6.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.05"))
+    float ScanningHeadSpeed = 0.65f;
+
+    // Autonomous white -> yellow -> red behaviour.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour")
+    bool bEnableAutonomousBehaviour = true;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
+    float ScanningMoveSpeed = 165.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
+    float AttackMoveSpeed = 390.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="100.0"))
+    float PatrolRadius = 1200.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="1.0"))
+    float PatrolAcceptanceRadius = 120.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.1"))
+    float PatrolRetargetMin = 2.5f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.1"))
+    float PatrolRetargetMax = 5.0f;
+
+    /** Head snaps first; body deliberately waits before turning toward a suspicious sound. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
+    float AlertBodyTurnDelay = 0.28f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
+    float AlertBodyTurnSpeed = 4.5f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="1.0"))
+    float AttackMoveAcceptanceRadius = 500.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.05"))
+    float AttackMoveRequestInterval = 0.25f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
+    float PounceCooldown = 2.25f;
+
+    // Assign imported Unreal animation assets in BP_LeaperEnemy defaults.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation")
+    TObjectPtr<UAnimationAsset> CrawlAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation")
+    TObjectPtr<UAnimationAsset> AlertStanceAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation")
+    TObjectPtr<UAnimationAsset> AttackCrawlAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation")
+    TObjectPtr<UAnimationAsset> PounceAnimation;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper")
     float MinPounceRange = 350.0f;
@@ -271,6 +345,14 @@ private:
     FRotator HeadBaseLocalRotation = FRotator::ZeroRotator;
     float CurrentHeadYaw = 0.0f;
     float CurrentHeadPitch = 0.0f;
+    float ScanClock = 0.0f;
+    float VisualLockStartTime = -BIG_NUMBER;
+    float BodyTurnStartTime = -BIG_NUMBER;
+    float NextPatrolRetargetTime = 0.0f;
+    float NextAttackMoveRequestTime = 0.0f;
+    float NextPounceAllowedTime = 0.0f;
+    bool bHasLastSeenLocation = false;
+    FVector LastSeenLocation = FVector::ZeroVector;
 
     UPROPERTY(VisibleInstanceOnly, Category="Afterfall|Leaper|Alert")
     EAFLeaperAlertState AlertState = EAFLeaperAlertState::Scanning;
@@ -291,6 +373,14 @@ private:
 
     void UpdateThreatSensing(float DeltaSeconds);
     void UpdateHeadTurn(float DeltaSeconds);
+    void UpdateBehaviourMovement(float DeltaSeconds);
+    void UpdateScanningPatrol();
+    void UpdateAlertBodyTurn(float DeltaSeconds);
+    void UpdateAttackPursuit();
+    void StopAIMovement();
+    void SetMovementSpeedForState();
+    void PlayStateAnimation();
+    bool GetCurrentThreatLocation(FVector& OutLocation) const;
     bool HasLineOfSightToPlayer(AActor* PlayerActor) const;
     FVector GetHeadWorldLocation() const;
 
