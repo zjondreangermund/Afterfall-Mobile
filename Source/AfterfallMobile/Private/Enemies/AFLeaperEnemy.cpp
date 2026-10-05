@@ -2,6 +2,7 @@
 
 #include "AIController.h"
 #include "Animation/AnimationAsset.h"
+#include "Animation/AnimSingleNodeInstance.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -161,13 +162,6 @@ void AAFLeaperEnemy::BeginPlay()
     if (GetMesh())
     {
         MeshBaseRelativeRotation = GetMesh()->GetRelativeRotation();
-
-        if (GetMesh()->GetBoneIndex(HeadBoneName) != INDEX_NONE)
-        {
-            HeadBaseLocalRotation = GetMesh()->GetBoneQuaternion(
-                HeadBoneName,
-                EBoneSpaces::LocalSpace).Rotator();
-        }
     }
 
     SightScanAccumulator = SightScanInterval;
@@ -176,6 +170,8 @@ void AAFLeaperEnemy::BeginPlay()
     LastThreatTime = -1000000.0f;
     VisualLockStartTime = -1000000.0f;
     BodyTurnStartTime = -1000000.0f;
+    AlertStateEnteredTime = -1000000.0f;
+    NextInvestigateMoveRequestTime = 0.0f;
     NextPounceAllowedTime = 0.0f;
 
     if (!GetController())
@@ -480,14 +476,9 @@ void AAFLeaperEnemy::UpdateHeadTurn(float DeltaSeconds)
         FMath::Max(0.0f, DeltaSeconds),
         TurnSpeed);
 
-    const FRotator HeadOffset(
-        CurrentHeadPitch * HeadPitchSign,
-        CurrentHeadYaw * HeadYawSign,
-        0.0f);
-    GetMesh()->SetBoneRotationByName(
-        HeadBoneName,
-        HeadBaseLocalRotation + HeadOffset,
-        EBoneSpaces::LocalSpace);
+    // The normal animated SkeletalMesh cannot be safely pose-edited here.
+    // ABP_Leaper reads GetHeadLookYaw/GetHeadLookPitch and applies them with
+    // a Transform (Modify) Bone node after locomotion has been evaluated.
 }
 
 
@@ -1117,15 +1108,19 @@ void AAFLeaperEnemy::SetAlertState(EAFLeaperAlertState NewState)
     SetMovementSpeedForState();
 
     const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+    bInvestigatingThreat = false;
+
     if (AlertState == EAFLeaperAlertState::Scanning)
     {
         NextPatrolRetargetTime = 0.0f;
     }
     else if (AlertState == EAFLeaperAlertState::Alert)
     {
-        // Freeze immediately. The head turns first, then the body follows.
+        // Freeze immediately. Head aims first, then the whole body turns.
         StopAIMovement();
+        AlertStateEnteredTime = Now;
         BodyTurnStartTime = Now + FMath::Max(0.0f, AlertBodyTurnDelay);
+        NextInvestigateMoveRequestTime = 0.0f;
     }
 
     PlayStateAnimation();
@@ -1564,10 +1559,49 @@ void AAFLeaperEnemy::SetMovementSpeedForState()
         return;
     }
 
-    GetCharacterMovement()->MaxWalkSpeed =
-        AlertState == EAFLeaperAlertState::Attacking
-            ? AttackMoveSpeed
-            : ScanningMoveSpeed;
+    switch (AlertState)
+    {
+        case EAFLeaperAlertState::Scanning:
+            GetCharacterMovement()->MaxWalkSpeed = ScanningMoveSpeed;
+            break;
+
+        case EAFLeaperAlertState::Alert:
+            GetCharacterMovement()->MaxWalkSpeed = InvestigateMoveSpeed;
+            break;
+
+        case EAFLeaperAlertState::Attacking:
+            GetCharacterMovement()->MaxWalkSpeed = AttackMoveSpeed;
+            break;
+
+        default:
+            GetCharacterMovement()->MaxWalkSpeed = ScanningMoveSpeed;
+            break;
+    }
+}
+
+void AAFLeaperEnemy::PlayFallbackAnimation(
+    UAnimationAsset* Animation,
+    bool bLoop,
+    float PlayRate)
+{
+    if (!Animation || !GetMesh() || !bUseSingleNodeAnimationFallback)
+    {
+        return;
+    }
+
+    // Never kick an Animation Blueprint out of control. In production the
+    // AnimBP owns locomotion, alert pose blending and the head aim bone.
+    if (GetMesh()->GetAnimationMode() == EAnimationMode::AnimationBlueprint)
+    {
+        return;
+    }
+
+    GetMesh()->PlayAnimation(Animation, bLoop);
+
+    if (UAnimSingleNodeInstance* SingleNode = GetMesh()->GetSingleNodeInstance())
+    {
+        SingleNode->SetPlayRate(FMath::Max(0.05f, PlayRate));
+    }
 }
 
 void AAFLeaperEnemy::PlayStateAnimation()
@@ -1578,30 +1612,30 @@ void AAFLeaperEnemy::PlayStateAnimation()
     }
 
     UAnimationAsset* DesiredAnimation = nullptr;
-    bool bLoop = true;
+    float DesiredRate = 1.0f;
 
     switch (AlertState)
     {
         case EAFLeaperAlertState::Scanning:
             DesiredAnimation = CrawlAnimation;
+            DesiredRate = ScanningAnimationRate;
             break;
 
         case EAFLeaperAlertState::Alert:
             DesiredAnimation = AlertStanceAnimation;
+            DesiredRate = AlertAnimationRate;
             break;
 
         case EAFLeaperAlertState::Attacking:
             DesiredAnimation = AttackCrawlAnimation ? AttackCrawlAnimation : CrawlAnimation;
+            DesiredRate = AttackAnimationRate;
             break;
 
         default:
             break;
     }
 
-    if (DesiredAnimation)
-    {
-        GetMesh()->PlayAnimation(DesiredAnimation, bLoop);
-    }
+    PlayFallbackAnimation(DesiredAnimation, true, DesiredRate);
 }
 
 bool AAFLeaperEnemy::GetCurrentThreatLocation(FVector& OutLocation) const
@@ -1697,6 +1731,83 @@ void AAFLeaperEnemy::UpdateAlertBodyTurn(float DeltaSeconds)
         AlertBodyTurnSpeed));
 }
 
+void AAFLeaperEnemy::UpdateAlertInvestigation()
+{
+    if (!GetWorld() || AlertState != EAFLeaperAlertState::Alert)
+    {
+        return;
+    }
+
+    // Seeing the player during yellow should remain a tense freeze while the
+    // confirmation timer runs. Do not slide toward them in the alert pose.
+    if (VisualTarget.IsValid())
+    {
+        if (bInvestigatingThreat)
+        {
+            StopAIMovement();
+            bInvestigatingThreat = false;
+            PlayStateAnimation();
+        }
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (Now - AlertStateEnteredTime <
+        FMath::Max(0.0f, AlertInvestigateDelay))
+    {
+        return;
+    }
+
+    FVector ThreatLocation;
+    if (!GetCurrentThreatLocation(ThreatLocation))
+    {
+        return;
+    }
+
+    FVector FlatDelta = ThreatLocation - GetActorLocation();
+    FlatDelta.Z = 0.0f;
+
+    if (FlatDelta.SizeSquared() <=
+        FMath::Square(FMath::Max(1.0f, InvestigateAcceptanceRadius)))
+    {
+        if (bInvestigatingThreat)
+        {
+            StopAIMovement();
+            bInvestigatingThreat = false;
+            PlayStateAnimation();
+        }
+        return;
+    }
+
+    AAIController* AI = Cast<AAIController>(GetController());
+    if (!AI || Now < NextInvestigateMoveRequestTime)
+    {
+        return;
+    }
+
+    NextInvestigateMoveRequestTime =
+        Now + FMath::Max(0.05f, InvestigateMoveRequestInterval);
+
+    if (!bInvestigatingThreat)
+    {
+        bInvestigatingThreat = true;
+        PlayFallbackAnimation(
+            CrawlAnimation,
+            true,
+            InvestigationAnimationRate);
+    }
+
+    AI->MoveToLocation(
+        ThreatLocation,
+        FMath::Max(1.0f, InvestigateAcceptanceRadius),
+        true,
+        true,
+        true,
+        false,
+        nullptr,
+        true);
+}
+
 void AAFLeaperEnemy::UpdateAttackPursuit()
 {
     if (!GetWorld() || bPounceInProgress)
@@ -1776,6 +1887,7 @@ void AAFLeaperEnemy::UpdateBehaviourMovement(float DeltaSeconds)
 
         case EAFLeaperAlertState::Alert:
             UpdateAlertBodyTurn(DeltaSeconds);
+            UpdateAlertInvestigation();
             break;
 
         case EAFLeaperAlertState::Attacking:
