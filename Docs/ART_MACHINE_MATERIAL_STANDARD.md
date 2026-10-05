@@ -95,3 +95,25 @@ When the first production Unreal master material is created, expose at least:
 - damage/weak-point glow
 
 Use material instances per machine instead of duplicating the full shader.
+
+
+## Weathered / rusted production finish
+
+The cleaner titanium/steel palette remains the structural material language, but the current art direction is **weathered industrial machinery**, not clean silver.
+
+For the Leaper and other exposed field machines:
+
+- primary armor should read as oxidized steel / dark brown metal
+- rust should appear in irregular patches rather than a flat brown tint
+- seams, recesses and lower areas should carry darker grime
+- pistons and moving rods can remain somewhat cleaner and more metallic
+- cables remain black rubber
+- orange service paint should look burnt/faded, not bright toy plastic
+- white/yellow/red threat-state lights remain clean and readable
+- dormant weak points remain grey; exposed/hit weak points stay pale yellow-white
+
+Run this after the current detail/material pass:
+
+`Tools/Blender/afterfall_machine_materials_v02_rusted.py`
+
+The rust pass uses procedural Blender nodes and keeps existing material names, rigs, animations, weak-point slots and signal-light materials intact.
