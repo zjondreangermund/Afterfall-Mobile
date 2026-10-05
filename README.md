@@ -72,3 +72,7 @@ All mechanical enemies use the shared dark-titanium / brushed-steel robot palett
 
 To update an existing Blender machine scene without rebuilding its rig or animation, run:
 `Tools/Blender/afterfall_machine_materials_v01.py`.
+
+For the Leaper's integrated robot detail pass (replaces tagged v22 floating rings/fins), run
+`Tools/Blender/afterfall_leaper_v23_integrated_robot_details.py` on the existing final scene.
+See [v23 setup, preservation checks and Unreal test steps](Docs/Enemies/Leaper_V23_Integrated_Robot.md).
