@@ -63,3 +63,12 @@ Blender alert stance generator:
 
 The first tagged building-climb system (ground -> wall -> roof -> NavMesh) is documented in
 `Docs/Enemies/Leaper_Surface_Traversal.md`.
+
+
+## Machine material standard
+
+All mechanical enemies use the shared dark-titanium / brushed-steel robot palette documented in
+`Docs/ART_MACHINE_MATERIAL_STANDARD.md`.
+
+To update an existing Blender machine scene without rebuilding its rig or animation, run:
+`Tools/Blender/afterfall_machine_materials_v01.py`.
