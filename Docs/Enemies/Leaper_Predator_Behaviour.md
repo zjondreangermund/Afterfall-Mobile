@@ -140,10 +140,11 @@ Use a simple empty level first.
 5. Make sure **Enable Surface Traversal** is OFF.
 6. Make sure **Enable Autonomous Behaviour** is ON.
 7. Assign the crawl and alert animations or connect `ABP_Leaper`.
-8. Start far enough away that the Leaper begins in white scanning mode.
-9. Walk sideways inside its sight range.
-10. It should stop, turn yellow, aim its head at you, raise its body/front legs, then go red after sustained sight.
-11. Break line of sight: it should investigate the last-seen position and later return to white if it cannot reacquire you.
+8. For the first walk/alert test, you can temporarily turn **Enable Pounce** OFF.
+9. Start far enough away that the Leaper begins in white scanning mode.
+10. Walk sideways inside its sight range.
+11. It should stop, turn yellow, aim its head at you, raise its body/front legs, then go red after sustained sight.
+12. Break line of sight: it should investigate the last-seen position and later return to white if it cannot reacquire you.
 
 ## Expected first tuning values
 
