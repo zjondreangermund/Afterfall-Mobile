@@ -6,6 +6,7 @@
 #include "Engine/DamageEvents.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "Loot/AFLootPickup.h"
 #include "Materials/MaterialInterface.h"
@@ -22,6 +23,10 @@ namespace AFLeaperWeakPoints
 
 AAFLeaperEnemy::AAFLeaperEnemy()
 {
+    PrimaryActorTick.bCanEverTick = true;
+    PrimaryActorTick.bStartWithTickEnabled = true;
+    PrimaryActorTick.TickGroup = TG_PostUpdateWork;
+
     EnemyId = TEXT("Leaper");
     WeakPointLootClass = AAFLootPickup::StaticClass();
 
@@ -31,6 +36,7 @@ AAFLeaperEnemy::AAFLeaperEnemy()
     GetMesh()->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     GetMesh()->SetCollisionResponseToAllChannels(ECR_Ignore);
     GetMesh()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+    AddTickPrerequisiteComponent(GetMesh());
 
     WeakEyeHitbox = CreateDefaultSubobject<USphereComponent>(TEXT("WeakEyeHitbox"));
     ConfigureWeakPointHitbox(WeakEyeHitbox, TEXT("weak_eye"), 18.0f);
@@ -141,6 +147,256 @@ void AAFLeaperEnemy::BeginPlay()
     InitializeWeakPoints();
     FindImportedHelperMaterials();
     SetAlertState(EAFLeaperAlertState::Scanning);
+
+    if (GetMesh() && GetMesh()->GetBoneIndex(HeadBoneName) != INDEX_NONE)
+    {
+        HeadBaseLocalRotation = GetMesh()->GetBoneQuaternion(
+            HeadBoneName,
+            EBoneSpaces::LocalSpace).Rotator();
+    }
+
+    SightScanAccumulator = SightScanInterval;
+    LastVisualTime = -1000000.0f;
+    LastHeardTime = -1000000.0f;
+    LastThreatTime = -1000000.0f;
+}
+
+void AAFLeaperEnemy::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+
+    UpdateThreatSensing(DeltaSeconds);
+    UpdateHeadTurn(DeltaSeconds);
+}
+
+void AAFLeaperEnemy::NotifyPlayerSeen(AActor* PlayerActor)
+{
+    if (!PlayerActor || PlayerActor == this || !GetWorld())
+    {
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    VisualTarget = PlayerActor;
+    LastVisualTime = Now;
+    LastThreatTime = Now;
+
+    if (AlertState == EAFLeaperAlertState::Scanning)
+    {
+        SetAlertState(EAFLeaperAlertState::Alert);
+    }
+}
+
+void AAFLeaperEnemy::NotifyGunshotHeard(
+    FVector WorldLocation,
+    float Loudness)
+{
+    if (!GetWorld())
+    {
+        return;
+    }
+
+    const float EffectiveRange = GunshotHearingRange *
+        FMath::Clamp(Loudness, 0.25f, 4.0f);
+
+    if (EffectiveRange <= 0.0f ||
+        FVector::DistSquared(GetActorLocation(), WorldLocation) >
+            FMath::Square(EffectiveRange))
+    {
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    LastHeardLocation = WorldLocation;
+    LastHeardTime = Now;
+    LastThreatTime = Now;
+    bHasHeardLocation = true;
+
+    if (AlertState == EAFLeaperAlertState::Scanning)
+    {
+        SetAlertState(EAFLeaperAlertState::Alert);
+    }
+}
+
+void AAFLeaperEnemy::NotifyThreatSensed(
+    FVector WorldLocation,
+    EAFLeaperAlertState ThreatState)
+{
+    if (!GetWorld())
+    {
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    LastHeardLocation = WorldLocation;
+    LastHeardTime = Now;
+    LastThreatTime = Now;
+    bHasHeardLocation = true;
+
+    if (ThreatState != EAFLeaperAlertState::Scanning)
+    {
+        SetAlertState(ThreatState);
+    }
+}
+
+void AAFLeaperEnemy::UpdateThreatSensing(float DeltaSeconds)
+{
+    if (!GetWorld())
+    {
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+
+    if (bAutoSensePlayer)
+    {
+        SightScanAccumulator += FMath::Max(0.0f, DeltaSeconds);
+
+        if (SightScanAccumulator >= FMath::Max(0.01f, SightScanInterval))
+        {
+            SightScanAccumulator = 0.0f;
+
+            APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
+            if (PlayerPawn && PlayerPawn != this &&
+                FVector::DistSquared(GetActorLocation(), PlayerPawn->GetActorLocation()) <=
+                    FMath::Square(PlayerSightRange) &&
+                HasLineOfSightToPlayer(PlayerPawn))
+            {
+                NotifyPlayerSeen(PlayerPawn);
+            }
+        }
+    }
+
+    if (VisualTarget.IsValid() &&
+        Now - LastVisualTime > FMath::Max(0.0f, VisualMemoryDuration))
+    {
+        VisualTarget.Reset();
+    }
+
+    if (bHasHeardLocation &&
+        Now - LastHeardTime > FMath::Max(0.0f, HearingMemoryDuration))
+    {
+        bHasHeardLocation = false;
+    }
+
+    const bool bHasRecentVisual = VisualTarget.IsValid();
+    const bool bHasRecentHearing = bHasHeardLocation;
+    if (AlertState == EAFLeaperAlertState::Alert &&
+        !bHasRecentVisual &&
+        !bHasRecentHearing &&
+        Now - LastThreatTime > FMath::Max(0.0f, AlertMemoryDuration))
+    {
+        SetAlertState(EAFLeaperAlertState::Scanning);
+    }
+}
+
+bool AAFLeaperEnemy::HasLineOfSightToPlayer(AActor* PlayerActor) const
+{
+    if (!GetWorld() || !PlayerActor)
+    {
+        return false;
+    }
+
+    const FVector EyeLocation = GetHeadWorldLocation();
+    const FVector TargetLocation = PlayerActor->GetActorLocation() +
+        FVector(0.0f, 0.0f, 80.0f);
+
+    FCollisionQueryParams QueryParams(
+        SCENE_QUERY_STAT(AFLeaperSight),
+        true,
+        this);
+    QueryParams.AddIgnoredActor(this);
+
+    FHitResult Hit;
+    if (!GetWorld()->LineTraceSingleByChannel(
+            Hit,
+            EyeLocation,
+            TargetLocation,
+            ECC_Visibility,
+            QueryParams))
+    {
+        return true;
+    }
+
+    return Hit.GetActor() == PlayerActor;
+}
+
+FVector AAFLeaperEnemy::GetHeadWorldLocation() const
+{
+    if (GetMesh() && GetMesh()->GetBoneIndex(HeadBoneName) != INDEX_NONE)
+    {
+        return GetMesh()->GetBoneLocation(HeadBoneName);
+    }
+
+    return GetActorLocation() + FVector(0.0f, 0.0f, 100.0f);
+}
+
+void AAFLeaperEnemy::UpdateHeadTurn(float DeltaSeconds)
+{
+    if (!GetMesh() ||
+        GetMesh()->GetBoneIndex(HeadBoneName) == INDEX_NONE ||
+        !GetWorld())
+    {
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    const bool bTrackingVisual = VisualTarget.IsValid() &&
+        Now - LastVisualTime <= FMath::Max(0.0f, VisualMemoryDuration);
+    const bool bTrackingHearing = bHasHeardLocation &&
+        Now - LastHeardTime <= FMath::Max(0.0f, HearingMemoryDuration);
+
+    FVector LookTarget = GetActorLocation() +
+        GetActorForwardVector() * 1000.0f +
+        FVector(0.0f, 0.0f, 90.0f);
+
+    if (bTrackingVisual && VisualTarget.IsValid())
+    {
+        LookTarget = VisualTarget->GetActorLocation() +
+            FVector(0.0f, 0.0f, 80.0f);
+    }
+    else if (bTrackingHearing)
+    {
+        LookTarget = LastHeardLocation;
+    }
+
+    const FVector LocalDirection = GetActorTransform().InverseTransformVectorNoScale(
+        LookTarget - GetHeadWorldLocation());
+    const float HorizontalLength = FMath::Max(
+        1.0f,
+        FVector(LocalDirection.X, LocalDirection.Y, 0.0f).Size());
+
+    const float DesiredYaw = FMath::Clamp(
+        FMath::RadiansToDegrees(FMath::Atan2(LocalDirection.Y, LocalDirection.X)),
+        -MaxHeadYaw,
+        MaxHeadYaw);
+    const float DesiredPitch = FMath::Clamp(
+        FMath::RadiansToDegrees(FMath::Atan2(LocalDirection.Z, HorizontalLength)),
+        -MaxHeadPitch,
+        MaxHeadPitch);
+
+    const float TurnSpeed = (bTrackingVisual || bTrackingHearing)
+        ? ThreatHeadTurnSpeed
+        : HeadTurnSpeed;
+    CurrentHeadYaw = FMath::FInterpTo(
+        CurrentHeadYaw,
+        DesiredYaw,
+        FMath::Max(0.0f, DeltaSeconds),
+        TurnSpeed);
+    CurrentHeadPitch = FMath::FInterpTo(
+        CurrentHeadPitch,
+        DesiredPitch,
+        FMath::Max(0.0f, DeltaSeconds),
+        TurnSpeed);
+
+    const FRotator HeadOffset(
+        CurrentHeadPitch * HeadPitchSign,
+        CurrentHeadYaw * HeadYawSign,
+        0.0f);
+    GetMesh()->SetBoneRotationByName(
+        HeadBoneName,
+        HeadBaseLocalRotation + HeadOffset,
+        EBoneSpaces::LocalSpace);
 }
 
 void AAFLeaperEnemy::InitializeWeakPoints()
@@ -272,10 +528,21 @@ float AAFLeaperEnemy::TakeDamage(
 {
     float FinalDamage = DamageAmount;
 
+    // A hit is also a close-range threat report. Projectile and hitscan
+    // weapons can therefore make the Leaper snap toward the impact without
+    // requiring every weapon Blueprint to know about this enemy class.
+    FVector ThreatLocation = GetActorLocation();
+    if (DamageCauser)
+    {
+        ThreatLocation = DamageCauser->GetActorLocation();
+    }
+
     if (DamageAmount > 0.0f && DamageEvent.IsOfType(FPointDamageEvent::ClassID))
     {
         const FPointDamageEvent& PointEvent =
             static_cast<const FPointDamageEvent&>(DamageEvent);
+
+        ThreatLocation = PointEvent.HitInfo.ImpactPoint;
 
         const FName WeakPointId = ResolveWeakPointId(PointEvent.HitInfo);
 
@@ -294,6 +561,11 @@ float AAFLeaperEnemy::TakeDamage(
                 FinalDamage *= FMath::Max(1.0f, Definition->DamageMultiplier);
             }
         }
+    }
+
+    if (DamageAmount > 0.0f)
+    {
+        NotifyGunshotHeard(ThreatLocation, 1.0f);
     }
 
     if (FinalDamage > 0.0f && AlertState == EAFLeaperAlertState::Scanning)
@@ -642,6 +914,8 @@ bool AAFLeaperEnemy::TryPounceAt(AActor* TargetActor)
     {
         return false;
     }
+
+    NotifyPlayerSeen(TargetActor);
 
     const float FlightTime = FMath::Max(0.25f, PounceFlightTime);
     const float GravityZ = GetWorld()->GetGravityZ();

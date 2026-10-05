@@ -44,3 +44,7 @@ Run it in the existing final Blender scene. See [setup and export](Docs/Enemies/
 For centering and moving mandibles, run `Tools/Blender/afterfall_leaper_v18_centered_mandible_motion.py`
 on the existing V1.7 scene. Press Space over the 3D view to play the facial loop.
 See [V1.8 motion and export](Docs/Enemies/Leaper_V18_Centered_Motion.md).
+
+For the wider predator threat flare and runtime sensing/head tracking, run
+`Tools/Blender/afterfall_leaper_v19_predator_reaction_motion.py` on the saved
+V1.8 `.blend`. See [V1.9 predator reaction](Docs/Enemies/Leaper_V19_Predator_Reaction.md).

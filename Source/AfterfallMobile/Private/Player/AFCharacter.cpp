@@ -2,6 +2,8 @@
 
 #include "Camera/CameraComponent.h"
 #include "Components/AFHealthComponent.h"
+#include "Enemies/AFLeaperEnemy.h"
+#include "EngineUtils.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Inventory/AFInventoryComponent.h"
 #include "Kismet/GameplayStatics.h"
@@ -75,6 +77,17 @@ void AAFCharacter::FirePrimary()
 
     const FVector Start = FollowCamera->GetComponentLocation();
     const FVector End = Start + (FollowCamera->GetForwardVector() * FireRange);
+
+    // The shot is a world event as soon as the weapon fires. Leapers decide
+    // whether they can hear it from their own hearing range and turn toward
+    // this location even when the trace misses.
+    for (TActorIterator<AAFLeaperEnemy> It(GetWorld()); It; ++It)
+    {
+        if (AAFLeaperEnemy* Leaper = *It)
+        {
+            Leaper->NotifyGunshotHeard(GetActorLocation(), 1.0f);
+        }
+    }
 
     FHitResult Hit;
     FCollisionQueryParams Params(SCENE_QUERY_STAT(AFPrimaryFire), true, this);

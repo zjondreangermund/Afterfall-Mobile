@@ -97,6 +97,8 @@ class AFTERFALLMOBILE_API AAFLeaperEnemy : public AAFEnemyBase
 public:
     AAFLeaperEnemy();
 
+    virtual void Tick(float DeltaSeconds) override;
+
     virtual float TakeDamage(
         float DamageAmount,
         struct FDamageEvent const& DamageEvent,
@@ -108,6 +110,20 @@ public:
 
     UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper|Alert")
     void SetAlertState(EAFLeaperAlertState NewState);
+
+    /** Report a player that this Leaper can currently see. */
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper|Alert|Sensing")
+    void NotifyPlayerSeen(AActor* PlayerActor);
+
+    /** Report a world-space gunshot or other loud threat location. */
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper|Alert|Sensing")
+    void NotifyGunshotHeard(FVector WorldLocation, float Loudness = 1.0f);
+
+    /** Blueprint hook for AI Perception or other threat sources. */
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Leaper|Alert|Sensing")
+    void NotifyThreatSensed(
+        FVector WorldLocation,
+        EAFLeaperAlertState ThreatState = EAFLeaperAlertState::Alert);
 
     UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Alert")
     EAFLeaperAlertState GetAlertState() const { return AlertState; }
@@ -139,6 +155,50 @@ public:
 protected:
     virtual void BeginPlay() override;
     virtual void Landed(const FHitResult& Hit) override;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing")
+    bool bAutoSensePlayer = true;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float PlayerSightRange = 2600.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.01"))
+    float SightScanInterval = 0.08f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float VisualMemoryDuration = 1.25f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float GunshotHearingRange = 3200.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float HearingMemoryDuration = 3.5f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float AlertMemoryDuration = 5.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing")
+    FName HeadBoneName = TEXT("head");
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float HeadTurnSpeed = 5.5f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0"))
+    float ThreatHeadTurnSpeed = 13.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0", ClampMax="180.0"))
+    float MaxHeadYaw = 78.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="0.0", ClampMax="90.0"))
+    float MaxHeadPitch = 32.0f;
+
+    // The imported Leaper rig can use the opposite local axis. These signs
+    // make the head-turn response tunable without changing the skeleton.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="-1.0", ClampMax="1.0"))
+    float HeadYawSign = 1.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Alert|Sensing", meta=(ClampMin="-1.0", ClampMax="1.0"))
+    float HeadPitchSign = 1.0f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper")
     float MinPounceRange = 350.0f;
@@ -200,6 +260,18 @@ protected:
 private:
     bool bPounceInProgress = false;
 
+    float SightScanAccumulator = 0.0f;
+    float LastVisualTime = -BIG_NUMBER;
+    float LastHeardTime = -BIG_NUMBER;
+    float LastThreatTime = -BIG_NUMBER;
+    bool bHasHeardLocation = false;
+
+    TWeakObjectPtr<AActor> VisualTarget;
+    FVector LastHeardLocation = FVector::ZeroVector;
+    FRotator HeadBaseLocalRotation = FRotator::ZeroRotator;
+    float CurrentHeadYaw = 0.0f;
+    float CurrentHeadPitch = 0.0f;
+
     UPROPERTY(VisibleInstanceOnly, Category="Afterfall|Leaper|Alert")
     EAFLeaperAlertState AlertState = EAFLeaperAlertState::Scanning;
 
@@ -216,6 +288,11 @@ private:
     void InitializeWeakPoints();
     void FindImportedHelperMaterials();
     void ApplyAlertMaterial();
+
+    void UpdateThreatSensing(float DeltaSeconds);
+    void UpdateHeadTurn(float DeltaSeconds);
+    bool HasLineOfSightToPlayer(AActor* PlayerActor) const;
+    FVector GetHeadWorldLocation() const;
 
     FName ResolveWeakPointId(const FHitResult& HitInfo) const;
     const FAFLeaperWeakPointDefinition* FindWeakPointDefinition(FName WeakPointId) const;
