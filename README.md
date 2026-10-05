@@ -72,3 +72,10 @@ All mechanical enemies use the shared dark-titanium / brushed-steel robot palett
 
 To update an existing Blender machine scene without rebuilding its rig or animation, run:
 `Tools/Blender/afterfall_machine_materials_v01.py`.
+
+
+### Rusted machine finish
+
+For the current weathered industrial art direction, run
+`Tools/Blender/afterfall_machine_materials_v02_rusted.py`
+after the normal machine/detail material pass. It adds patchy procedural rust and grime while preserving signal lights, weak points, rigs and animations.
