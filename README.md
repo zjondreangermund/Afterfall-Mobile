@@ -48,3 +48,12 @@ See [V1.8 motion and export](Docs/Enemies/Leaper_V18_Centered_Motion.md).
 For the wider predator threat flare and runtime sensing/head tracking, run
 `Tools/Blender/afterfall_leaper_v19_predator_reaction_motion.py` on the saved
 V1.8 `.blend`. See [V1.9 predator reaction](Docs/Enemies/Leaper_V19_Predator_Reaction.md).
+
+## Leaper predator behaviour
+
+The current white → yellow → red predator AI, autonomous crawl, independent head scan,
+sound investigation, alert stance and attack flow are documented in
+`Docs/Enemies/Leaper_Predator_Behaviour.md`.
+
+Blender alert stance generator:
+`Tools/Blender/afterfall_leaper_v21_predator_alert_stance.py`.
