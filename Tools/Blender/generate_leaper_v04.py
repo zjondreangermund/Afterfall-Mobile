@@ -120,19 +120,24 @@ scene.unit_settings.system='METRIC'
 scene.unit_settings.scale_length=1.0
 scene.render.engine='BLENDER_EEVEE'
 
-M_ARMOR=make_mat("M_Armor_BoneWhite",(0.50,0.47,0.43),0.55,0.34)
-M_ARMOR2=make_mat("M_Armor_DarkWhite",(0.30,0.29,0.28),0.60,0.30)
-M_DARK=make_mat("M_Mechanical_Dark",(0.025,0.03,0.04),0.90,0.22)
-M_ORANGE=make_mat("M_Accent_Orange",(0.50,0.055,0.008),0.55,0.28)
-M_RED=make_mat("M_Sensor_Red",(0.05,0.002,0.001),0.10,0.18,(1.0,0.02,0.001),12.0)
-M_CABLE=make_mat("M_Cable",(0.015,0.012,0.012),0.10,0.55)
-M_HYD=make_mat("M_Hydraulic",(0.08,0.08,0.09),0.95,0.16)
+# Shared industrial robot palette. Keep legacy material names because later
+# weapon/rig scripts look them up by name.
+M_ARMOR=make_mat("M_Armor_BoneWhite",(0.285,0.315,0.345),0.96,0.29)
+M_ARMOR2=make_mat("M_Armor_DarkWhite",(0.145,0.165,0.185),0.92,0.38)
+M_DARK=make_mat("M_Mechanical_Dark",(0.075,0.088,0.102),0.94,0.42)
+M_ORANGE=make_mat("M_Accent_Orange",(0.52,0.12,0.018),0.70,0.31)
+M_RED=make_mat("M_Sensor_Red",(0.80,0.025,0.012),0.08,0.15,(1.0,0.015,0.008),10.0)
+M_CABLE=make_mat("M_Cable",(0.025,0.028,0.032),0.22,0.62)
+M_HYD=make_mat("M_Hydraulic",(0.36,0.39,0.42),0.98,0.20)
 M_BLUE=make_mat("M_PlayerRef",(0.03,0.12,0.25),0.0,0.65)
 
 bpy.ops.object.empty_add(type='PLAIN_AXES',location=(0,0,1.45))
 ROOT=bpy.context.object
 ROOT.name="LEAPER_ROOT"
 ROOT.empty_display_size=0.35
+ROOT["MachineMaterialStandard"]="Industrial Titanium / Steel"
+ROOT["MachineMaterialPaletteVersion"]="1.0"
+ROOT["MachineSignalRule"]="White scan; yellow alert; red attack."
 
 add_box("Thorax_Core",(0,0,1.48),(1.30,0.86,0.32),M_DARK,0.16,parent=ROOT)
 add_box("Armor_Center",(-0.15,0,1.86),(0.98,0.64,0.16),M_ARMOR,0.14,
