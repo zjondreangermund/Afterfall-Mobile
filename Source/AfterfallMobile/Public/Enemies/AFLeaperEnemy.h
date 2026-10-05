@@ -18,6 +18,13 @@ enum class EAFLeaperAlertState : uint8
     Attacking UMETA(DisplayName="Attacking")
 };
 
+UENUM(BlueprintType)
+enum class EAFLeaperTraversalMode : uint8
+{
+    Ground UMETA(DisplayName="Ground"),
+    SurfaceCrawl UMETA(DisplayName="Surface Crawl")
+};
+
 USTRUCT(BlueprintType)
 struct FAFLeaperWeakPointDefinition
 {
@@ -128,6 +135,15 @@ public:
 
     UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Alert")
     EAFLeaperAlertState GetAlertState() const { return AlertState; }
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Traversal")
+    EAFLeaperTraversalMode GetTraversalMode() const { return TraversalMode; }
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Traversal")
+    bool IsSurfaceCrawling() const
+    {
+        return TraversalMode == EAFLeaperTraversalMode::SurfaceCrawl;
+    }
 
     UPROPERTY(BlueprintAssignable, Category="Afterfall|Leaper|Alert")
     FAFOnLeaperAlertStateChanged OnAlertStateChanged;
@@ -261,6 +277,62 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
     float PounceCooldown = 2.25f;
 
+    // Surface traversal is intentionally tag-driven for the first playable map.
+    // Add the LeaperClimbable tag to a building actor or mesh component.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
+    bool bEnableSurfaceTraversal = true;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
+    bool bAllowScanningSurfaceTraversal = true;
+
+    /** Prototype-only convenience: when enabled, any steep WorldStatic surface can be climbed. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
+    bool bPrototypeClimbAllWorldStatic = false;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
+    FName ClimbableActorTag = TEXT("LeaperClimbable");
+
+    /** Maximum absolute Z of a surface normal that counts as a wall/steep climb entry. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="0.0", ClampMax="0.95"))
+    float MaxClimbEntryNormalZ = 0.55f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="10.0"))
+    float ClimbEntryProbeDistance = 180.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="10.0"))
+    float SurfaceProbeDistance = 170.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="10.0"))
+    float EdgeProbeDistance = 155.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="0.0"))
+    float SurfaceClearance = 8.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="10.0"))
+    float SurfaceCrawlSpeed = 235.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="0.1"))
+    float SurfaceNormalInterpSpeed = 10.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="0.1"))
+    float SurfaceRotationInterpSpeed = 10.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="0.0"))
+    float SurfaceLostGraceTime = 0.20f;
+
+    /** A positive-up surface above this threshold can hand control back to NavMesh. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="0.0", ClampMax="1.0"))
+    float WalkableExitNormalZ = 0.72f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
+    bool bExitToNavOnWalkableSurface = true;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal", meta=(ClampMin="0.0"))
+    float MinSurfaceCrawlTimeBeforeNavExit = 0.30f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
+    FVector NavigationProjectionExtent = FVector(140.0f, 140.0f, 180.0f);
+
     // Assign imported Unreal animation assets in BP_LeaperEnemy defaults.
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation")
     TObjectPtr<UAnimationAsset> CrawlAnimation;
@@ -334,6 +406,17 @@ protected:
 private:
     bool bPounceInProgress = false;
 
+    UPROPERTY(VisibleInstanceOnly, Category="Afterfall|Leaper|Traversal")
+    EAFLeaperTraversalMode TraversalMode = EAFLeaperTraversalMode::Ground;
+
+    FVector CurrentSurfaceNormal = FVector::UpVector;
+    FVector CurrentSurfaceTangent = FVector::ForwardVector;
+    FRotator MeshBaseRelativeRotation = FRotator::ZeroRotator;
+    float SurfaceCrawlStartTime = -BIG_NUMBER;
+    float LastSurfaceContactTime = -BIG_NUMBER;
+    float SavedGravityScale = 1.0f;
+    bool bSavedOrientRotationToMovement = true;
+
     float SightScanAccumulator = 0.0f;
     float LastVisualTime = -BIG_NUMBER;
     float LastHeardTime = -BIG_NUMBER;
@@ -370,6 +453,28 @@ private:
     void InitializeWeakPoints();
     void FindImportedHelperMaterials();
     void ApplyAlertMaterial();
+
+    bool UpdateSurfaceTraversal(float DeltaSeconds);
+    bool TryBeginSurfaceCrawl();
+    void BeginSurfaceCrawl(const FHitResult& SurfaceHit, const FVector& EntryDirection);
+    void UpdateSurfaceCrawl(float DeltaSeconds);
+    void EndSurfaceCrawl(bool bResumeNavigation);
+    bool TraceForClimbableSurface(
+        const FVector& Start,
+        const FVector& End,
+        FHitResult& OutHit) const;
+    bool IsClimbableHit(const FHitResult& Hit) const;
+    bool FindSurfaceContact(
+        const FVector& CandidateLocation,
+        const FVector& MoveDirection,
+        FHitResult& OutHit) const;
+    FVector ChooseSurfaceCrawlDirection() const;
+    float GetSurfaceOffsetForNormal(const FVector& SurfaceNormal) const;
+    void ApplySurfaceVisualRotation(
+        const FVector& SurfaceForward,
+        const FVector& SurfaceNormal,
+        float DeltaSeconds);
+    bool CanResumeNavigationAt(const FVector& WorldLocation) const;
 
     void UpdateThreatSensing(float DeltaSeconds);
     void UpdateHeadTurn(float DeltaSeconds);
