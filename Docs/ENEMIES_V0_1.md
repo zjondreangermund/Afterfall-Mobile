@@ -2,6 +2,20 @@
 
 The current concept material is reference for role and mood only. Final production meshes must be original.
 
+## Shared machine visual standard
+
+All machine enemies now use the same industrial robot material language:
+- dark titanium primary armor
+- brushed-steel secondary plates/edges
+- dark gunmetal inner mechanics
+- brighter steel hydraulics/barrels
+- restrained industrial-orange accents
+- grey dormant weak points
+- white scanning, yellow alert and red attack lights where applicable
+
+Avoid flat-black primary armor: it hides the mechanical form in darker levels.
+See `Docs/ART_MACHINE_MATERIAL_STANDARD.md`.
+
 ## Scout Drone
 **Role:** reconnaissance / harassment
 
