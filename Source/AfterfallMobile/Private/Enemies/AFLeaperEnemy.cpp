@@ -1,5 +1,7 @@
 #include "Enemies/AFLeaperEnemy.h"
 
+#include "AIController.h"
+#include "Animation/AnimationAsset.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/SphereComponent.h"
@@ -10,6 +12,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Loot/AFLootPickup.h"
 #include "Materials/MaterialInterface.h"
+#include "NavigationSystem.h"
 #include "TimerManager.h"
 
 namespace AFLeaperWeakPoints
@@ -29,6 +32,11 @@ AAFLeaperEnemy::AAFLeaperEnemy()
 
     EnemyId = TEXT("Leaper");
     WeakPointLootClass = AAFLootPickup::StaticClass();
+
+    // Always give placed/spawned Leapers an AI controller so the native
+    // predator state machine can patrol, freeze, investigate and attack.
+    AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
+    AIControllerClass = AAIController::StaticClass();
 
     // Let weapon visibility traces reach the skeletal mesh / weak-point hitboxes
     // instead of being swallowed by the character capsule.
@@ -159,6 +167,17 @@ void AAFLeaperEnemy::BeginPlay()
     LastVisualTime = -1000000.0f;
     LastHeardTime = -1000000.0f;
     LastThreatTime = -1000000.0f;
+    VisualLockStartTime = -1000000.0f;
+    BodyTurnStartTime = -1000000.0f;
+    NextPounceAllowedTime = 0.0f;
+
+    if (!GetController())
+    {
+        SpawnDefaultController();
+    }
+
+    SetMovementSpeedForState();
+    PlayStateAnimation();
 }
 
 void AAFLeaperEnemy::Tick(float DeltaSeconds)
@@ -166,6 +185,7 @@ void AAFLeaperEnemy::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
 
     UpdateThreatSensing(DeltaSeconds);
+    UpdateBehaviourMovement(DeltaSeconds);
     UpdateHeadTurn(DeltaSeconds);
 }
 
@@ -177,13 +197,29 @@ void AAFLeaperEnemy::NotifyPlayerSeen(AActor* PlayerActor)
     }
 
     const float Now = GetWorld()->GetTimeSeconds();
+    const bool bContinuousLock = VisualTarget.IsValid() &&
+        VisualTarget.Get() == PlayerActor &&
+        Now - LastVisualTime <= FMath::Max(0.20f, SightScanInterval * 2.5f);
+
+    if (!bContinuousLock)
+    {
+        VisualLockStartTime = Now;
+    }
+
     VisualTarget = PlayerActor;
+    LastSeenLocation = PlayerActor->GetActorLocation();
+    bHasLastSeenLocation = true;
     LastVisualTime = Now;
     LastThreatTime = Now;
 
     if (AlertState == EAFLeaperAlertState::Scanning)
     {
         SetAlertState(EAFLeaperAlertState::Alert);
+    }
+    else if (AlertState == EAFLeaperAlertState::Alert &&
+             Now - VisualLockStartTime >= FMath::Max(0.0f, TargetConfirmationTime))
+    {
+        SetAlertState(EAFLeaperAlertState::Attacking);
     }
 }
 
@@ -257,12 +293,31 @@ void AAFLeaperEnemy::UpdateThreatSensing(float DeltaSeconds)
             SightScanAccumulator = 0.0f;
 
             APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
-            if (PlayerPawn && PlayerPawn != this &&
-                FVector::DistSquared(GetActorLocation(), PlayerPawn->GetActorLocation()) <=
-                    FMath::Square(PlayerSightRange) &&
-                HasLineOfSightToPlayer(PlayerPawn))
+            if (PlayerPawn && PlayerPawn != this)
             {
-                NotifyPlayerSeen(PlayerPawn);
+                const float DistanceSquared = FVector::DistSquared(
+                    GetActorLocation(),
+                    PlayerPawn->GetActorLocation());
+                const bool bInsideSightRange = DistanceSquared <=
+                    FMath::Square(PlayerSightRange);
+                const bool bCloseEnoughToNoticeStillTarget = DistanceSquared <=
+                    FMath::Square(CloseVisualDetectionRange);
+                const bool bMovementDetected =
+                    PlayerPawn->GetVelocity().Size2D() >= MovementDetectionSpeed;
+
+                // White/search reacts primarily to movement. Once yellow/red,
+                // keep checking the target even if the player freezes.
+                const bool bShouldReactToVisiblePlayer =
+                    AlertState != EAFLeaperAlertState::Scanning ||
+                    bMovementDetected ||
+                    bCloseEnoughToNoticeStillTarget;
+
+                if (bInsideSightRange &&
+                    bShouldReactToVisiblePlayer &&
+                    HasLineOfSightToPlayer(PlayerPawn))
+                {
+                    NotifyPlayerSeen(PlayerPawn);
+                }
             }
         }
     }
@@ -271,6 +326,12 @@ void AAFLeaperEnemy::UpdateThreatSensing(float DeltaSeconds)
         Now - LastVisualTime > FMath::Max(0.0f, VisualMemoryDuration))
     {
         VisualTarget.Reset();
+        VisualLockStartTime = -1000000.0f;
+
+        if (AlertState == EAFLeaperAlertState::Attacking && !bPounceInProgress)
+        {
+            SetAlertState(EAFLeaperAlertState::Alert);
+        }
     }
 
     if (bHasHeardLocation &&
@@ -346,34 +407,49 @@ void AAFLeaperEnemy::UpdateHeadTurn(float DeltaSeconds)
     const bool bTrackingHearing = bHasHeardLocation &&
         Now - LastHeardTime <= FMath::Max(0.0f, HearingMemoryDuration);
 
-    FVector LookTarget = GetActorLocation() +
-        GetActorForwardVector() * 1000.0f +
-        FVector(0.0f, 0.0f, 90.0f);
+    float DesiredYaw = 0.0f;
+    float DesiredPitch = 0.0f;
 
-    if (bTrackingVisual && VisualTarget.IsValid())
+    if ((bTrackingVisual && VisualTarget.IsValid()) || bTrackingHearing)
     {
-        LookTarget = VisualTarget->GetActorLocation() +
-            FVector(0.0f, 0.0f, 80.0f);
+        FVector LookTarget = LastHeardLocation;
+        if (bTrackingVisual && VisualTarget.IsValid())
+        {
+            LookTarget = VisualTarget->GetActorLocation() + FVector(0.0f, 0.0f, 80.0f);
+        }
+
+        const FVector LocalDirection = GetActorTransform().InverseTransformVectorNoScale(
+            LookTarget - GetHeadWorldLocation());
+        const float HorizontalLength = FMath::Max(
+            1.0f,
+            FVector(LocalDirection.X, LocalDirection.Y, 0.0f).Size());
+
+        DesiredYaw = FMath::Clamp(
+            FMath::RadiansToDegrees(FMath::Atan2(LocalDirection.Y, LocalDirection.X)),
+            -MaxHeadYaw,
+            MaxHeadYaw);
+        DesiredPitch = FMath::Clamp(
+            FMath::RadiansToDegrees(FMath::Atan2(LocalDirection.Z, HorizontalLength)),
+            -MaxHeadPitch,
+            MaxHeadPitch);
     }
-    else if (bTrackingHearing)
+    else
     {
-        LookTarget = LastHeardLocation;
+        // Independent predator scan. Two unequal waves prevent a robotic
+        // left-right metronome and keep the head alive while the body crawls.
+        ScanClock += FMath::Max(0.0f, DeltaSeconds) * ScanningHeadSpeed;
+        const float Primary = FMath::Sin(ScanClock * 1.17f);
+        const float Secondary = FMath::Sin(ScanClock * 0.43f + 1.15f);
+        const float Vertical = FMath::Sin(ScanClock * 0.71f + 0.60f);
+        DesiredYaw = FMath::Clamp(
+            ScanningHeadYaw * ((Primary * 0.78f) + (Secondary * 0.22f)),
+            -MaxHeadYaw,
+            MaxHeadYaw);
+        DesiredPitch = FMath::Clamp(
+            ScanningHeadPitch * Vertical,
+            -MaxHeadPitch,
+            MaxHeadPitch);
     }
-
-    const FVector LocalDirection = GetActorTransform().InverseTransformVectorNoScale(
-        LookTarget - GetHeadWorldLocation());
-    const float HorizontalLength = FMath::Max(
-        1.0f,
-        FVector(LocalDirection.X, LocalDirection.Y, 0.0f).Size());
-
-    const float DesiredYaw = FMath::Clamp(
-        FMath::RadiansToDegrees(FMath::Atan2(LocalDirection.Y, LocalDirection.X)),
-        -MaxHeadYaw,
-        MaxHeadYaw);
-    const float DesiredPitch = FMath::Clamp(
-        FMath::RadiansToDegrees(FMath::Atan2(LocalDirection.Z, HorizontalLength)),
-        -MaxHeadPitch,
-        MaxHeadPitch);
 
     const float TurnSpeed = (bTrackingVisual || bTrackingHearing)
         ? ThreatHeadTurnSpeed
@@ -478,6 +554,21 @@ void AAFLeaperEnemy::SetAlertState(EAFLeaperAlertState NewState)
 
     AlertState = NewState;
     ApplyAlertMaterial();
+    SetMovementSpeedForState();
+
+    const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+    if (AlertState == EAFLeaperAlertState::Scanning)
+    {
+        NextPatrolRetargetTime = 0.0f;
+    }
+    else if (AlertState == EAFLeaperAlertState::Alert)
+    {
+        // Freeze immediately. The head turns first, then the body follows.
+        StopAIMovement();
+        BodyTurnStartTime = Now + FMath::Max(0.0f, AlertBodyTurnDelay);
+    }
+
+    PlayStateAnimation();
     OnAlertStateChanged.Broadcast(AlertState);
 }
 
@@ -897,9 +988,254 @@ void AAFLeaperEnemy::SpawnWeakPointLoot(
         AwayFromBody * 260.0f + FVector(0.0f, 0.0f, 180.0f));
 }
 
+void AAFLeaperEnemy::StopAIMovement()
+{
+    if (AAIController* AI = Cast<AAIController>(GetController()))
+    {
+        AI->StopMovement();
+    }
+    GetCharacterMovement()->StopMovementImmediately();
+}
+
+void AAFLeaperEnemy::SetMovementSpeedForState()
+{
+    if (!GetCharacterMovement())
+    {
+        return;
+    }
+
+    GetCharacterMovement()->MaxWalkSpeed =
+        AlertState == EAFLeaperAlertState::Attacking
+            ? AttackMoveSpeed
+            : ScanningMoveSpeed;
+}
+
+void AAFLeaperEnemy::PlayStateAnimation()
+{
+    if (!GetMesh())
+    {
+        return;
+    }
+
+    UAnimationAsset* DesiredAnimation = nullptr;
+    bool bLoop = true;
+
+    switch (AlertState)
+    {
+        case EAFLeaperAlertState::Scanning:
+            DesiredAnimation = CrawlAnimation;
+            break;
+
+        case EAFLeaperAlertState::Alert:
+            DesiredAnimation = AlertStanceAnimation;
+            break;
+
+        case EAFLeaperAlertState::Attacking:
+            DesiredAnimation = AttackCrawlAnimation ? AttackCrawlAnimation : CrawlAnimation;
+            break;
+
+        default:
+            break;
+    }
+
+    if (DesiredAnimation)
+    {
+        GetMesh()->PlayAnimation(DesiredAnimation, bLoop);
+    }
+}
+
+bool AAFLeaperEnemy::GetCurrentThreatLocation(FVector& OutLocation) const
+{
+    if (VisualTarget.IsValid())
+    {
+        OutLocation = VisualTarget->GetActorLocation();
+        return true;
+    }
+
+    if (bHasHeardLocation)
+    {
+        OutLocation = LastHeardLocation;
+        return true;
+    }
+
+    if (bHasLastSeenLocation)
+    {
+        OutLocation = LastSeenLocation;
+        return true;
+    }
+
+    return false;
+}
+
+void AAFLeaperEnemy::UpdateScanningPatrol()
+{
+    if (!GetWorld())
+    {
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (Now < NextPatrolRetargetTime)
+    {
+        return;
+    }
+
+    NextPatrolRetargetTime = Now + FMath::FRandRange(
+        FMath::Min(PatrolRetargetMin, PatrolRetargetMax),
+        FMath::Max(PatrolRetargetMin, PatrolRetargetMax));
+
+    AAIController* AI = Cast<AAIController>(GetController());
+    UNavigationSystemV1* Nav = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+    if (!AI || !Nav)
+    {
+        return;
+    }
+
+    FNavLocation PatrolPoint;
+    if (Nav->GetRandomReachablePointInRadius(
+            GetActorLocation(),
+            FMath::Max(100.0f, PatrolRadius),
+            PatrolPoint))
+    {
+        AI->MoveToLocation(
+            PatrolPoint.Location,
+            FMath::Max(1.0f, PatrolAcceptanceRadius),
+            true,
+            true,
+            true,
+            false,
+            nullptr,
+            true);
+    }
+}
+
+void AAFLeaperEnemy::UpdateAlertBodyTurn(float DeltaSeconds)
+{
+    if (!GetWorld() || GetWorld()->GetTimeSeconds() < BodyTurnStartTime)
+    {
+        return;
+    }
+
+    FVector ThreatLocation;
+    if (!GetCurrentThreatLocation(ThreatLocation))
+    {
+        return;
+    }
+
+    FVector FlatDirection = ThreatLocation - GetActorLocation();
+    FlatDirection.Z = 0.0f;
+    if (FlatDirection.IsNearlyZero())
+    {
+        return;
+    }
+
+    const FRotator DesiredRotation(0.0f, FlatDirection.Rotation().Yaw, 0.0f);
+    SetActorRotation(FMath::RInterpTo(
+        GetActorRotation(),
+        DesiredRotation,
+        FMath::Max(0.0f, DeltaSeconds),
+        AlertBodyTurnSpeed));
+}
+
+void AAFLeaperEnemy::UpdateAttackPursuit()
+{
+    if (!GetWorld() || bPounceInProgress)
+    {
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (Now < NextAttackMoveRequestTime)
+    {
+        return;
+    }
+    NextAttackMoveRequestTime = Now + FMath::Max(0.05f, AttackMoveRequestInterval);
+
+    AAIController* AI = Cast<AAIController>(GetController());
+    if (!AI)
+    {
+        return;
+    }
+
+    if (VisualTarget.IsValid())
+    {
+        AActor* Target = VisualTarget.Get();
+        const float HorizontalDistance = FVector(
+            Target->GetActorLocation().X - GetActorLocation().X,
+            Target->GetActorLocation().Y - GetActorLocation().Y,
+            0.0f).Size();
+
+        if (HorizontalDistance >= MinPounceRange &&
+            HorizontalDistance <= MaxPounceRange &&
+            Now >= NextPounceAllowedTime)
+        {
+            StopAIMovement();
+            if (TryPounceAt(Target))
+            {
+                return;
+            }
+        }
+
+        AI->MoveToActor(
+            Target,
+            FMath::Max(1.0f, AttackMoveAcceptanceRadius),
+            true,
+            true,
+            true,
+            nullptr,
+            true);
+        return;
+    }
+
+    if (bHasLastSeenLocation)
+    {
+        AI->MoveToLocation(
+            LastSeenLocation,
+            FMath::Max(1.0f, AttackMoveAcceptanceRadius),
+            true,
+            true,
+            true,
+            false,
+            nullptr,
+            true);
+    }
+}
+
+void AAFLeaperEnemy::UpdateBehaviourMovement(float DeltaSeconds)
+{
+    if (!bEnableAutonomousBehaviour || !GetWorld())
+    {
+        return;
+    }
+
+    switch (AlertState)
+    {
+        case EAFLeaperAlertState::Scanning:
+            UpdateScanningPatrol();
+            break;
+
+        case EAFLeaperAlertState::Alert:
+            UpdateAlertBodyTurn(DeltaSeconds);
+            break;
+
+        case EAFLeaperAlertState::Attacking:
+            UpdateAttackPursuit();
+            break;
+
+        default:
+            break;
+    }
+}
+
 bool AAFLeaperEnemy::TryPounceAt(AActor* TargetActor)
 {
     if (!TargetActor || bPounceInProgress || !GetWorld())
+    {
+        return false;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+    if (Now < NextPounceAllowedTime)
     {
         return false;
     }
@@ -924,7 +1260,15 @@ bool AAFLeaperEnemy::TryPounceAt(AActor* TargetActor)
     LaunchVelocity.Z -= 0.5f * GravityZ * FlightTime;
 
     bPounceInProgress = true;
+    NextPounceAllowedTime = Now + FMath::Max(0.0f, PounceCooldown);
     SetAlertState(EAFLeaperAlertState::Attacking);
+    StopAIMovement();
+
+    if (PounceAnimation && GetMesh())
+    {
+        GetMesh()->PlayAnimation(PounceAnimation, false);
+    }
+
     GetCharacterMovement()->SetMovementMode(MOVE_Falling);
     LaunchCharacter(LaunchVelocity, true, true);
     return true;
@@ -940,7 +1284,12 @@ void AAFLeaperEnemy::Landed(const FHitResult& Hit)
     }
 
     bPounceInProgress = false;
-    SetAlertState(EAFLeaperAlertState::Alert);
+    SetAlertState(VisualTarget.IsValid()
+        ? EAFLeaperAlertState::Attacking
+        : EAFLeaperAlertState::Alert);
+    // If the state stayed Attacking, explicitly leave the one-shot pounce
+    // animation and return to the red pursuit crawl.
+    PlayStateAnimation();
 
     UGameplayStatics::ApplyRadialDamage(
         this,
