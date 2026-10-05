@@ -3,6 +3,7 @@
 #include "AIController.h"
 #include "Animation/AnimationAsset.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/SphereComponent.h"
 #include "Engine/DamageEvents.h"
@@ -12,6 +13,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "Loot/AFLootPickup.h"
 #include "Materials/MaterialInterface.h"
+#include "Math/RotationMatrix.h"
 #include "NavigationSystem.h"
 #include "TimerManager.h"
 
@@ -156,11 +158,16 @@ void AAFLeaperEnemy::BeginPlay()
     FindImportedHelperMaterials();
     SetAlertState(EAFLeaperAlertState::Scanning);
 
-    if (GetMesh() && GetMesh()->GetBoneIndex(HeadBoneName) != INDEX_NONE)
+    if (GetMesh())
     {
-        HeadBaseLocalRotation = GetMesh()->GetBoneQuaternion(
-            HeadBoneName,
-            EBoneSpaces::LocalSpace).Rotator();
+        MeshBaseRelativeRotation = GetMesh()->GetRelativeRotation();
+
+        if (GetMesh()->GetBoneIndex(HeadBoneName) != INDEX_NONE)
+        {
+            HeadBaseLocalRotation = GetMesh()->GetBoneQuaternion(
+                HeadBoneName,
+                EBoneSpaces::LocalSpace).Rotator();
+        }
     }
 
     SightScanAccumulator = SightScanInterval;
@@ -185,7 +192,15 @@ void AAFLeaperEnemy::Tick(float DeltaSeconds)
     Super::Tick(DeltaSeconds);
 
     UpdateThreatSensing(DeltaSeconds);
-    UpdateBehaviourMovement(DeltaSeconds);
+
+    const bool bSurfaceTraversalOwnsMovement =
+        UpdateSurfaceTraversal(DeltaSeconds);
+
+    if (!bSurfaceTraversalOwnsMovement)
+    {
+        UpdateBehaviourMovement(DeltaSeconds);
+    }
+
     UpdateHeadTurn(DeltaSeconds);
 }
 
@@ -473,6 +488,551 @@ void AAFLeaperEnemy::UpdateHeadTurn(float DeltaSeconds)
         HeadBoneName,
         HeadBaseLocalRotation + HeadOffset,
         EBoneSpaces::LocalSpace);
+}
+
+
+bool AAFLeaperEnemy::UpdateSurfaceTraversal(float DeltaSeconds)
+{
+    if (!bEnableSurfaceTraversal || bPounceInProgress)
+    {
+        if (TraversalMode == EAFLeaperTraversalMode::SurfaceCrawl)
+        {
+            EndSurfaceCrawl(false);
+        }
+
+        return false;
+    }
+
+    if (TraversalMode == EAFLeaperTraversalMode::SurfaceCrawl)
+    {
+        UpdateSurfaceCrawl(DeltaSeconds);
+        return TraversalMode == EAFLeaperTraversalMode::SurfaceCrawl;
+    }
+
+    return TryBeginSurfaceCrawl();
+}
+
+bool AAFLeaperEnemy::TryBeginSurfaceCrawl()
+{
+    if (!GetWorld() || AlertState == EAFLeaperAlertState::Alert)
+    {
+        return false;
+    }
+
+    if (AlertState == EAFLeaperAlertState::Scanning &&
+        !bAllowScanningSurfaceTraversal)
+    {
+        return false;
+    }
+
+    FVector EntryDirection = GetVelocity();
+    EntryDirection.Z = 0.0f;
+
+    FVector ThreatLocation;
+    if (EntryDirection.SizeSquared2D() < FMath::Square(10.0f) &&
+        GetCurrentThreatLocation(ThreatLocation))
+    {
+        EntryDirection = ThreatLocation - GetActorLocation();
+        EntryDirection.Z = 0.0f;
+    }
+
+    if (!EntryDirection.Normalize())
+    {
+        EntryDirection = GetActorForwardVector().GetSafeNormal2D();
+    }
+
+    if (EntryDirection.IsNearlyZero())
+    {
+        return false;
+    }
+
+    const float ProbeHeight = GetCapsuleComponent()
+        ? FMath::Min(45.0f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight() * 0.30f)
+        : 30.0f;
+
+    const FVector Start =
+        GetActorLocation() + FVector::UpVector * ProbeHeight;
+    const FVector End =
+        Start + EntryDirection * FMath::Max(10.0f, ClimbEntryProbeDistance);
+
+    FHitResult SurfaceHit;
+    if (!TraceForClimbableSurface(Start, End, SurfaceHit))
+    {
+        return false;
+    }
+
+    const FVector SurfaceNormal = SurfaceHit.ImpactNormal.GetSafeNormal();
+    if (SurfaceNormal.IsNearlyZero() ||
+        FMath::Abs(SurfaceNormal.Z) > MaxClimbEntryNormalZ)
+    {
+        return false;
+    }
+
+    BeginSurfaceCrawl(SurfaceHit, EntryDirection);
+    return TraversalMode == EAFLeaperTraversalMode::SurfaceCrawl;
+}
+
+void AAFLeaperEnemy::BeginSurfaceCrawl(
+    const FHitResult& SurfaceHit,
+    const FVector& EntryDirection)
+{
+    if (!GetWorld() || !GetCharacterMovement())
+    {
+        return;
+    }
+
+    StopAIMovement();
+
+    TraversalMode = EAFLeaperTraversalMode::SurfaceCrawl;
+    SurfaceCrawlStartTime = GetWorld()->GetTimeSeconds();
+    LastSurfaceContactTime = SurfaceCrawlStartTime;
+
+    CurrentSurfaceNormal = SurfaceHit.ImpactNormal.GetSafeNormal();
+
+    CurrentSurfaceTangent = FVector::VectorPlaneProject(
+        FVector::UpVector,
+        CurrentSurfaceNormal).GetSafeNormal();
+
+    if (CurrentSurfaceTangent.IsNearlyZero())
+    {
+        CurrentSurfaceTangent = FVector::VectorPlaneProject(
+            EntryDirection,
+            CurrentSurfaceNormal).GetSafeNormal();
+    }
+
+    if (CurrentSurfaceTangent.IsNearlyZero())
+    {
+        CurrentSurfaceTangent = FVector::ForwardVector;
+    }
+
+    UCharacterMovementComponent* Movement = GetCharacterMovement();
+    SavedGravityScale = Movement->GravityScale;
+    bSavedOrientRotationToMovement = Movement->bOrientRotationToMovement;
+    Movement->GravityScale = 0.0f;
+    Movement->bOrientRotationToMovement = false;
+    Movement->SetMovementMode(MOVE_Flying);
+    Movement->StopMovementImmediately();
+
+    const float SurfaceOffset =
+        GetSurfaceOffsetForNormal(CurrentSurfaceNormal);
+
+    FHitResult MoveHit;
+    SetActorLocation(
+        SurfaceHit.ImpactPoint + CurrentSurfaceNormal * SurfaceOffset,
+        true,
+        &MoveHit,
+        ETeleportType::None);
+
+    ApplySurfaceVisualRotation(
+        CurrentSurfaceTangent,
+        CurrentSurfaceNormal,
+        1.0f);
+}
+
+void AAFLeaperEnemy::UpdateSurfaceCrawl(float DeltaSeconds)
+{
+    if (!GetWorld() || !GetCharacterMovement())
+    {
+        EndSurfaceCrawl(false);
+        return;
+    }
+
+    const float Now = GetWorld()->GetTimeSeconds();
+
+    FVector MoveDirection = ChooseSurfaceCrawlDirection();
+    const bool bFreezeOnSurface =
+        AlertState == EAFLeaperAlertState::Alert;
+
+    if (bFreezeOnSurface)
+    {
+        MoveDirection = FVector::ZeroVector;
+    }
+
+    const float CrawlSpeed =
+        AlertState == EAFLeaperAlertState::Attacking
+            ? FMath::Max(SurfaceCrawlSpeed, AttackMoveSpeed * 0.70f)
+            : SurfaceCrawlSpeed;
+
+    FVector CandidateLocation = GetActorLocation();
+    if (!MoveDirection.IsNearlyZero())
+    {
+        CandidateLocation +=
+            MoveDirection * CrawlSpeed * FMath::Max(0.0f, DeltaSeconds);
+    }
+
+    const FVector ProbeDirection = !MoveDirection.IsNearlyZero()
+        ? MoveDirection
+        : CurrentSurfaceTangent;
+
+    FHitResult SurfaceHit;
+    if (FindSurfaceContact(
+            CandidateLocation,
+            ProbeDirection,
+            SurfaceHit))
+    {
+        LastSurfaceContactTime = Now;
+
+        const FVector HitNormal = SurfaceHit.ImpactNormal.GetSafeNormal();
+        if (!HitNormal.IsNearlyZero())
+        {
+            CurrentSurfaceNormal = FMath::VInterpTo(
+                CurrentSurfaceNormal,
+                HitNormal,
+                FMath::Max(0.0f, DeltaSeconds),
+                SurfaceNormalInterpSpeed).GetSafeNormal();
+        }
+
+        FVector NewTangent = FVector::VectorPlaneProject(
+            ProbeDirection,
+            CurrentSurfaceNormal).GetSafeNormal();
+
+        if (NewTangent.IsNearlyZero())
+        {
+            NewTangent = FVector::VectorPlaneProject(
+                CurrentSurfaceTangent,
+                CurrentSurfaceNormal).GetSafeNormal();
+        }
+
+        if (!NewTangent.IsNearlyZero())
+        {
+            CurrentSurfaceTangent = NewTangent;
+        }
+
+        const float SurfaceOffset =
+            GetSurfaceOffsetForNormal(CurrentSurfaceNormal);
+
+        const FVector DesiredLocation =
+            SurfaceHit.ImpactPoint +
+            CurrentSurfaceNormal * SurfaceOffset;
+
+        FHitResult MoveHit;
+        SetActorLocation(
+            DesiredLocation,
+            true,
+            &MoveHit,
+            ETeleportType::None);
+
+        ApplySurfaceVisualRotation(
+            CurrentSurfaceTangent,
+            CurrentSurfaceNormal,
+            DeltaSeconds);
+
+        if (bExitToNavOnWalkableSurface &&
+            CurrentSurfaceNormal.Z >= WalkableExitNormalZ &&
+            Now - SurfaceCrawlStartTime >=
+                FMath::Max(0.0f, MinSurfaceCrawlTimeBeforeNavExit) &&
+            CanResumeNavigationAt(GetActorLocation()))
+        {
+            EndSurfaceCrawl(true);
+        }
+
+        return;
+    }
+
+    if (Now - LastSurfaceContactTime >
+        FMath::Max(0.0f, SurfaceLostGraceTime))
+    {
+        EndSurfaceCrawl(false);
+    }
+}
+
+void AAFLeaperEnemy::EndSurfaceCrawl(bool bResumeNavigation)
+{
+    if (TraversalMode != EAFLeaperTraversalMode::SurfaceCrawl)
+    {
+        return;
+    }
+
+    TraversalMode = EAFLeaperTraversalMode::Ground;
+    CurrentSurfaceNormal = FVector::UpVector;
+    CurrentSurfaceTangent = GetActorForwardVector().GetSafeNormal();
+
+    if (GetMesh())
+    {
+        GetMesh()->SetRelativeRotation(MeshBaseRelativeRotation);
+    }
+
+    if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+    {
+        Movement->GravityScale = SavedGravityScale;
+        Movement->bOrientRotationToMovement =
+            bSavedOrientRotationToMovement;
+        Movement->StopMovementImmediately();
+        Movement->SetMovementMode(
+            bResumeNavigation ? MOVE_Walking : MOVE_Falling);
+    }
+
+    NextAttackMoveRequestTime = 0.0f;
+    NextPatrolRetargetTime = 0.0f;
+}
+
+bool AAFLeaperEnemy::TraceForClimbableSurface(
+    const FVector& Start,
+    const FVector& End,
+    FHitResult& OutHit) const
+{
+    if (!GetWorld())
+    {
+        return false;
+    }
+
+    FCollisionObjectQueryParams ObjectQuery;
+    ObjectQuery.AddObjectTypesToQuery(ECC_WorldStatic);
+    ObjectQuery.AddObjectTypesToQuery(ECC_WorldDynamic);
+
+    FCollisionQueryParams QueryParams(
+        SCENE_QUERY_STAT(AFLeaperSurfaceTraversal),
+        false,
+        this);
+    QueryParams.AddIgnoredActor(this);
+
+    TArray<FHitResult> Hits;
+    if (!GetWorld()->LineTraceMultiByObjectType(
+            Hits,
+            Start,
+            End,
+            ObjectQuery,
+            QueryParams))
+    {
+        return false;
+    }
+
+    for (const FHitResult& Hit : Hits)
+    {
+        if (IsClimbableHit(Hit))
+        {
+            OutHit = Hit;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool AAFLeaperEnemy::IsClimbableHit(const FHitResult& Hit) const
+{
+    const AActor* HitActor = Hit.GetActor();
+    const UPrimitiveComponent* HitComponent = Hit.GetComponent();
+
+    if (bPrototypeClimbAllWorldStatic &&
+        HitComponent &&
+        HitComponent->GetCollisionObjectType() == ECC_WorldStatic)
+    {
+        return true;
+    }
+
+    const bool bActorTagged =
+        HitActor && HitActor->ActorHasTag(ClimbableActorTag);
+    const bool bComponentTagged =
+        HitComponent && HitComponent->ComponentHasTag(ClimbableActorTag);
+
+    return bActorTagged || bComponentTagged;
+}
+
+bool AAFLeaperEnemy::FindSurfaceContact(
+    const FVector& CandidateLocation,
+    const FVector& MoveDirection,
+    FHitResult& OutHit) const
+{
+    const FVector SurfaceNormal = CurrentSurfaceNormal.GetSafeNormal();
+    FVector Tangent = FVector::VectorPlaneProject(
+        MoveDirection,
+        SurfaceNormal).GetSafeNormal();
+
+    if (Tangent.IsNearlyZero())
+    {
+        Tangent = CurrentSurfaceTangent.GetSafeNormal();
+    }
+
+    const float SurfaceOffset =
+        GetSurfaceOffsetForNormal(SurfaceNormal);
+    const float ProbeDistance =
+        FMath::Max(10.0f, SurfaceProbeDistance);
+
+    const FVector PrimaryStart =
+        CandidateLocation + SurfaceNormal * 20.0f;
+    const FVector PrimaryEnd =
+        CandidateLocation -
+        SurfaceNormal * (SurfaceOffset + ProbeDistance);
+
+    if (TraceForClimbableSurface(
+            PrimaryStart,
+            PrimaryEnd,
+            OutHit))
+    {
+        return true;
+    }
+
+    if (Tangent.IsNearlyZero())
+    {
+        return false;
+    }
+
+    const float CornerDistance =
+        FMath::Max(20.0f, EdgeProbeDistance);
+
+    // Convex wall -> roof style transition:
+    // move just beyond the current edge, then probe backward along the
+    // travel direction so the top surface can be acquired.
+    const FVector ConvexStart =
+        CandidateLocation +
+        SurfaceNormal * FMath::Max(20.0f, SurfaceClearance + 20.0f);
+    const FVector ConvexEnd =
+        ConvexStart - Tangent * CornerDistance * 2.0f;
+
+    if (TraceForClimbableSurface(
+            ConvexStart,
+            ConvexEnd,
+            OutHit))
+    {
+        return true;
+    }
+
+    // Roof -> wall / outward convex edge. Move the probe below the current
+    // surface plane before looking back toward the building side.
+    const FVector DropStart =
+        CandidateLocation -
+        SurfaceNormal * CornerDistance * 0.70f +
+        Tangent * 20.0f;
+    const FVector DropEnd =
+        DropStart - Tangent * CornerDistance * 2.0f;
+
+    return TraceForClimbableSurface(
+        DropStart,
+        DropEnd,
+        OutHit);
+}
+
+FVector AAFLeaperEnemy::ChooseSurfaceCrawlDirection() const
+{
+    if (AlertState == EAFLeaperAlertState::Alert)
+    {
+        return FVector::ZeroVector;
+    }
+
+    const FVector SurfaceNormal =
+        CurrentSurfaceNormal.GetSafeNormal();
+
+    // Once a steep wall is engaged, climb toward its top before trying to
+    // chase laterally. This creates the predictable wall -> roof behaviour
+    // needed for the first industrial map.
+    if (FMath::Abs(SurfaceNormal.Z) < WalkableExitNormalZ)
+    {
+        const FVector UpAlongSurface =
+            FVector::VectorPlaneProject(
+                FVector::UpVector,
+                SurfaceNormal).GetSafeNormal();
+
+        if (!UpAlongSurface.IsNearlyZero())
+        {
+            return UpAlongSurface;
+        }
+    }
+
+    FVector ThreatLocation;
+    if (GetCurrentThreatLocation(ThreatLocation))
+    {
+        const FVector TowardThreat =
+            FVector::VectorPlaneProject(
+                ThreatLocation - GetActorLocation(),
+                SurfaceNormal).GetSafeNormal();
+
+        if (!TowardThreat.IsNearlyZero())
+        {
+            return TowardThreat;
+        }
+    }
+
+    const FVector ExistingTangent =
+        FVector::VectorPlaneProject(
+            CurrentSurfaceTangent,
+            SurfaceNormal).GetSafeNormal();
+
+    if (!ExistingTangent.IsNearlyZero())
+    {
+        return ExistingTangent;
+    }
+
+    return FVector::VectorPlaneProject(
+        GetActorForwardVector(),
+        SurfaceNormal).GetSafeNormal();
+}
+
+float AAFLeaperEnemy::GetSurfaceOffsetForNormal(
+    const FVector& SurfaceNormal) const
+{
+    if (!GetCapsuleComponent())
+    {
+        return 70.0f + SurfaceClearance;
+    }
+
+    const float Radius =
+        GetCapsuleComponent()->GetScaledCapsuleRadius();
+    const float HalfHeight =
+        GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+    const float UpBlend =
+        FMath::Clamp(FMath::Abs(SurfaceNormal.Z), 0.0f, 1.0f);
+
+    return FMath::Lerp(Radius, HalfHeight, UpBlend) +
+        FMath::Max(0.0f, SurfaceClearance);
+}
+
+void AAFLeaperEnemy::ApplySurfaceVisualRotation(
+    const FVector& SurfaceForward,
+    const FVector& SurfaceNormal,
+    float DeltaSeconds)
+{
+    if (!GetMesh())
+    {
+        return;
+    }
+
+    const FVector Up = SurfaceNormal.GetSafeNormal();
+    const FVector Forward = FVector::VectorPlaneProject(
+        SurfaceForward,
+        Up).GetSafeNormal();
+
+    if (Up.IsNearlyZero() || Forward.IsNearlyZero())
+    {
+        return;
+    }
+
+    const FQuat SurfaceBasis =
+        FRotationMatrix::MakeFromXZ(Forward, Up).ToQuat();
+    const FQuat MeshCorrection =
+        MeshBaseRelativeRotation.Quaternion();
+    const FRotator DesiredWorldRotation =
+        (SurfaceBasis * MeshCorrection).Rotator();
+
+    GetMesh()->SetWorldRotation(
+        FMath::RInterpTo(
+            GetMesh()->GetComponentRotation(),
+            DesiredWorldRotation,
+            FMath::Max(0.0f, DeltaSeconds),
+            SurfaceRotationInterpSpeed));
+}
+
+bool AAFLeaperEnemy::CanResumeNavigationAt(
+    const FVector& WorldLocation) const
+{
+    if (!GetWorld())
+    {
+        return false;
+    }
+
+    UNavigationSystemV1* Nav =
+        FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+
+    if (!Nav)
+    {
+        return false;
+    }
+
+    FNavLocation ProjectedLocation;
+    return Nav->ProjectPointToNavigation(
+        WorldLocation,
+        ProjectedLocation,
+        NavigationProjectionExtent);
 }
 
 void AAFLeaperEnemy::InitializeWeakPoints()
@@ -1249,6 +1809,11 @@ bool AAFLeaperEnemy::TryPounceAt(AActor* TargetActor)
         HorizontalDistance > MaxPounceRange)
     {
         return false;
+    }
+
+    if (TraversalMode == EAFLeaperTraversalMode::SurfaceCrawl)
+    {
+        EndSurfaceCrawl(false);
     }
 
     NotifyPlayerSeen(TargetActor);
