@@ -1178,9 +1178,17 @@ float AAFLeaperEnemy::TakeDamage(
     // weapons can therefore make the Leaper snap toward the impact without
     // requiring every weapon Blueprint to know about this enemy class.
     FVector ThreatLocation = GetActorLocation();
-    if (DamageCauser)
+    bool bHasExternalThreatLocation = false;
+
+    if (EventInstigator && EventInstigator->GetPawn())
+    {
+        ThreatLocation = EventInstigator->GetPawn()->GetActorLocation();
+        bHasExternalThreatLocation = true;
+    }
+    else if (DamageCauser && DamageCauser != this)
     {
         ThreatLocation = DamageCauser->GetActorLocation();
+        bHasExternalThreatLocation = true;
     }
 
     if (DamageAmount > 0.0f && DamageEvent.IsOfType(FPointDamageEvent::ClassID))
@@ -1188,7 +1196,10 @@ float AAFLeaperEnemy::TakeDamage(
         const FPointDamageEvent& PointEvent =
             static_cast<const FPointDamageEvent&>(DamageEvent);
 
-        ThreatLocation = PointEvent.HitInfo.ImpactPoint;
+        if (!bHasExternalThreatLocation)
+        {
+            ThreatLocation = PointEvent.HitInfo.ImpactPoint;
+        }
 
         const FName WeakPointId = ResolveWeakPointId(PointEvent.HitInfo);
 
@@ -1836,7 +1847,8 @@ void AAFLeaperEnemy::UpdateAttackPursuit()
             Target->GetActorLocation().Y - GetActorLocation().Y,
             0.0f).Size();
 
-        if (HorizontalDistance >= MinPounceRange &&
+        if (bEnablePounce &&
+            HorizontalDistance >= MinPounceRange &&
             HorizontalDistance <= MaxPounceRange &&
             Now >= NextPounceAllowedTime)
         {
@@ -1901,7 +1913,7 @@ void AAFLeaperEnemy::UpdateBehaviourMovement(float DeltaSeconds)
 
 bool AAFLeaperEnemy::TryPounceAt(AActor* TargetActor)
 {
-    if (!TargetActor || bPounceInProgress || !GetWorld())
+    if (!bEnablePounce || !TargetActor || bPounceInProgress || !GetWorld())
     {
         return false;
     }
