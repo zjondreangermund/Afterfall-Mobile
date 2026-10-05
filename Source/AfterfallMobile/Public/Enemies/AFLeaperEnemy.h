@@ -136,6 +136,22 @@ public:
     UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Alert")
     EAFLeaperAlertState GetAlertState() const { return AlertState; }
 
+    /** Feed these values into Transform (Modify) Bone in ABP_Leaper. */
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Alert|Animation")
+    float GetHeadLookYaw() const { return CurrentHeadYaw * HeadYawSign; }
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Alert|Animation")
+    float GetHeadLookPitch() const { return CurrentHeadPitch * HeadPitchSign; }
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Alert|Animation")
+    FRotator GetHeadLookRotation() const
+    {
+        return FRotator(GetHeadLookPitch(), GetHeadLookYaw(), 0.0f);
+    }
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Alert|Animation")
+    bool IsInvestigatingThreat() const { return bInvestigatingThreat; }
+
     UFUNCTION(BlueprintPure, Category="Afterfall|Leaper|Traversal")
     EAFLeaperTraversalMode GetTraversalMode() const { return TraversalMode; }
 
@@ -256,10 +272,10 @@ protected:
     float PatrolAcceptanceRadius = 120.0f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.1"))
-    float PatrolRetargetMin = 2.5f;
+    float PatrolRetargetMin = 4.0f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.1"))
-    float PatrolRetargetMax = 5.0f;
+    float PatrolRetargetMax = 7.0f;
 
     /** Head snaps first; body deliberately waits before turning toward a suspicious sound. */
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
@@ -267,6 +283,19 @@ protected:
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
     float AlertBodyTurnSpeed = 4.5f;
+
+    /** Time spent frozen in the raised-leg alert stance before investigating a sound/last seen position. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
+    float AlertInvestigateDelay = 1.10f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
+    float InvestigateMoveSpeed = 125.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="1.0"))
+    float InvestigateAcceptanceRadius = 165.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.05"))
+    float InvestigateMoveRequestInterval = 0.35f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="1.0"))
     float AttackMoveAcceptanceRadius = 500.0f;
@@ -277,10 +306,14 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
     float PounceCooldown = 2.25f;
 
+    /** Useful while tuning flat-ground walk/alert behaviour without the Leaper immediately launching. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour")
+    bool bEnablePounce = true;
+
     // Surface traversal is intentionally tag-driven for the first playable map.
     // Add the LeaperClimbable tag to a building actor or mesh component.
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
-    bool bEnableSurfaceTraversal = true;
+    bool bEnableSurfaceTraversal = false;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
     bool bAllowScanningSurfaceTraversal = true;
@@ -334,6 +367,10 @@ protected:
     FVector NavigationProjectionExtent = FVector(140.0f, 140.0f, 180.0f);
 
     // Assign imported Unreal animation assets in BP_LeaperEnemy defaults.
+    // If the mesh uses an Animation Blueprint these are optional fallbacks only.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation")
+    bool bUseSingleNodeAnimationFallback = true;
+
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation")
     TObjectPtr<UAnimationAsset> CrawlAnimation;
 
@@ -345,6 +382,18 @@ protected:
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation")
     TObjectPtr<UAnimationAsset> PounceAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation", meta=(ClampMin="0.05"))
+    float ScanningAnimationRate = 1.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation", meta=(ClampMin="0.05"))
+    float AlertAnimationRate = 1.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation", meta=(ClampMin="0.05"))
+    float InvestigationAnimationRate = 0.82f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Animation", meta=(ClampMin="0.05"))
+    float AttackAnimationRate = 1.20f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper")
     float MinPounceRange = 350.0f;
@@ -425,15 +474,17 @@ private:
 
     TWeakObjectPtr<AActor> VisualTarget;
     FVector LastHeardLocation = FVector::ZeroVector;
-    FRotator HeadBaseLocalRotation = FRotator::ZeroRotator;
     float CurrentHeadYaw = 0.0f;
     float CurrentHeadPitch = 0.0f;
     float ScanClock = 0.0f;
     float VisualLockStartTime = -BIG_NUMBER;
     float BodyTurnStartTime = -BIG_NUMBER;
+    float AlertStateEnteredTime = -BIG_NUMBER;
     float NextPatrolRetargetTime = 0.0f;
+    float NextInvestigateMoveRequestTime = 0.0f;
     float NextAttackMoveRequestTime = 0.0f;
     float NextPounceAllowedTime = 0.0f;
+    bool bInvestigatingThreat = false;
     bool bHasLastSeenLocation = false;
     FVector LastSeenLocation = FVector::ZeroVector;
 
@@ -481,10 +532,12 @@ private:
     void UpdateBehaviourMovement(float DeltaSeconds);
     void UpdateScanningPatrol();
     void UpdateAlertBodyTurn(float DeltaSeconds);
+    void UpdateAlertInvestigation();
     void UpdateAttackPursuit();
     void StopAIMovement();
     void SetMovementSpeedForState();
     void PlayStateAnimation();
+    void PlayFallbackAnimation(UAnimationAsset* Animation, bool bLoop, float PlayRate);
     bool GetCurrentThreatLocation(FVector& OutLocation) const;
     bool HasLineOfSightToPlayer(AActor* PlayerActor) const;
     FVector GetHeadWorldLocation() const;
