@@ -306,6 +306,10 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
     float PounceCooldown = 2.25f;
 
+    /** Useful while tuning flat-ground walk/alert behaviour without the Leaper immediately launching. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour")
+    bool bEnablePounce = true;
+
     // Surface traversal is intentionally tag-driven for the first playable map.
     // Add the LeaperClimbable tag to a building actor or mesh component.
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
