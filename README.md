@@ -57,3 +57,9 @@ sound investigation, alert stance and attack flow are documented in
 
 Blender alert stance generator:
 `Tools/Blender/afterfall_leaper_v21_predator_alert_stance.py`.
+
+
+## Leaper building traversal
+
+The first tagged building-climb system (ground -> wall -> roof -> NavMesh) is documented in
+`Docs/Enemies/Leaper_Surface_Traversal.md`.
