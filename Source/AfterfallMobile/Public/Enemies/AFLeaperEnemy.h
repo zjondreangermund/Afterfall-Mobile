@@ -584,7 +584,7 @@ private:
     void PlayStateAnimation();
     void PlayFallbackAnimation(UAnimationAsset* Animation, bool bLoop, float PlayRate);
     bool GetCurrentThreatLocation(FVector& OutLocation) const;
-    bool BuildPredatorFlankLocation(AActor* TargetActor, FVector& OutLocation) const;
+    bool BuildPredatorFlankLocation(AActor* TargetActor, FVector& OutLocation);
     bool BuildPredatorSearchLocation(const FVector& ThreatLocation, FVector& OutLocation) const;
     bool TryFindVerticalAmbushEntry(FVector& OutLocation) const;
 
