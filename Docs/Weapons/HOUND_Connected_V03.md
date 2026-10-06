@@ -17,7 +17,7 @@ Corrections from the user's front/underside and opposite-side screenshots:
   mechanical housings, cable terminals and magazine protective strips.
 
 The nine logical mesh groups and six socket markers retain their existing
-names and documented pivots. Geometry is 5,288 triangles. This is an improved
+names and documented pivots. Geometry is 5,376 triangles. This is an improved
 game-art blockout, not a claim of matching the concept's finished detail and
 texture quality. Procedural materials still need baking for Unreal/mobile.
 
