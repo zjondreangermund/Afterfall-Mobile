@@ -6,6 +6,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Inventory/AFInventoryComponent.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -17,6 +18,12 @@ AAFCharacter::AAFCharacter()
     bUseControllerRotationPitch = false;
     bUseControllerRotationYaw = false;
     bUseControllerRotationRoll = false;
+
+    // Free-look traversal: camera can rotate independently while the character
+    // turns toward the actual movement direction. Aiming temporarily switches
+    // to controller-yaw facing so strafing/backpedalling behaves like a shooter.
+    GetCharacterMovement()->bOrientRotationToMovement = true;
+    GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
 
     CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
     CameraBoom->SetupAttachment(RootComponent);
@@ -110,14 +117,19 @@ void AAFCharacter::ReloadWeapon() { if (IsValid(EquippedWeapon)) EquippedWeapon-
 void AAFCharacter::StartAiming()
 {
     if (bIsAiming || !IsValid(EquippedWeapon) || HealthComponent->IsDead()) return;
-    bPreviousControllerYaw=bUseControllerRotationYaw;
-    bIsAiming=true; bUseControllerRotationYaw=true;
+    bPreviousControllerYaw = bUseControllerRotationYaw;
+    bPreviousOrientRotationToMovement = GetCharacterMovement()->bOrientRotationToMovement;
+    bIsAiming = true;
+    bUseControllerRotationYaw = true;
+    GetCharacterMovement()->bOrientRotationToMovement = false;
     EquippedWeapon->SetAiming(true);
 }
 void AAFCharacter::StopAiming()
 {
     if (!bIsAiming) return;
-    bIsAiming=false; bUseControllerRotationYaw=bPreviousControllerYaw;
+    bIsAiming = false;
+    bUseControllerRotationYaw = bPreviousControllerYaw;
+    GetCharacterMovement()->bOrientRotationToMovement = bPreviousOrientRotationToMovement;
     if (IsValid(EquippedWeapon)) EquippedWeapon->SetAiming(false);
 }
 bool AAFCharacter::EquipWeapon(AAFWeaponBase* Weapon)
