@@ -4,6 +4,7 @@
 #include "Components/PointLightComponent.h"
 #include "Components/AFHealthComponent.h"
 #include "Enemies/AFLeaperEnemy.h"
+#include "Enemies/AFRigEnemyBase.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
@@ -164,7 +165,14 @@ bool AAFWeaponBase::TryFire()
     // Stop a muzzle poking through a wall from shooting beyond that wall.
     bool bHit = GetWorld()->LineTraceSingleByChannel(Hit,Pawn->GetActorLocation(),Start,ECC_Visibility,Params);
     if (!bHit) bHit=GetWorld()->LineTraceSingleByChannel(Hit,Start,Start+Direction*Range,ECC_Visibility,Params);
-    for (TActorIterator<AAFLeaperEnemy> It(GetWorld()); It; ++It) It->NotifyGunshotHeard(Start,1.f);
+    for (TActorIterator<AAFLeaperEnemy> It(GetWorld()); It; ++It)
+    {
+        It->NotifyGunshotHeard(Start, 1.f);
+    }
+    for (TActorIterator<AAFRigEnemyBase> It(GetWorld()); It; ++It)
+    {
+        It->NotifyGunshotHeard(Start, 1.f);
+    }
     if (bHit && Hit.GetActor()) UGameplayStatics::ApplyPointDamage(Hit.GetActor(),FMath::Max(0.f,Tuning.Damage),Direction,Hit,Pawn->GetController(),this,nullptr);
     MuzzleLight->SetWorldLocation(Start);
     FlashRemaining=.045f;
