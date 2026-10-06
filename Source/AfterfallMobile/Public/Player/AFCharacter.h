@@ -70,6 +70,7 @@ protected:
     UFUNCTION() void HandleWeaponOwnerDeath();
     float DefaultFOV = 90.f;
     bool bPreviousControllerYaw = false;
+    bool bPreviousOrientRotationToMovement = true;
     // Retained for serialized Blueprint compatibility; tune EquippedWeapon.Tuning instead.
     UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Set Damage on the weapon Tuning"))
     float PrimaryDamage = 25.0f;
