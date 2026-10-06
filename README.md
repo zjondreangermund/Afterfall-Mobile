@@ -79,3 +79,15 @@ To update an existing Blender machine scene without rebuilding its rig or animat
 For the current weathered industrial art direction, run
 `Tools/Blender/afterfall_machine_materials_v02_rusted.py`
 after the normal machine/detail material pass. It adds patchy procedural rust and grime while preserving signal lights, weak points, rigs and animations.
+
+
+## Leaper V23/V24 fitted detail history
+
+The fitted integrated robot-detail passes are retained in the repository for reference and scene compatibility:
+
+- `Tools/Blender/afterfall_leaper_v23_integrated_robot_details.py`
+- `Tools/Blender/afterfall_leaper_v24_scene_fitted_robot.py`
+
+See `Docs/Enemies/Leaper_V23_Integrated_Robot.md` for the preservation checks and Unreal test notes.
+
+V26 remains the newer combat-armor direction; V23/V24 are kept so none of the previous fitted scene work is lost.
