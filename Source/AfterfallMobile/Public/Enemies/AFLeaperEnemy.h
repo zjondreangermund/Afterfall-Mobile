@@ -310,6 +310,40 @@ protected:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour")
     bool bEnablePounce = true;
 
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour")
+    bool bEnablePredatorFlanking = true;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0", ClampMax="1.0"))
+    float FlankChance = 0.72f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="100.0"))
+    float FlankDistance = 760.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0"))
+    float FlankBehindDistance = 420.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="10.0"))
+    float FlankAcceptanceRadius = 190.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.1"))
+    float FlankRetargetInterval = 1.8f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="100.0"))
+    float LostSightSearchOffset = 620.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.1"))
+    float LostSightSearchRetargetInterval = 1.4f;
+
+    /** If wall traversal is enabled, occasionally break from NavMesh and use a nearby tagged wall as an ambush route. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour")
+    bool bEnableVerticalAmbushRoutes = true;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="0.0", ClampMax="1.0"))
+    float VerticalAmbushChance = 0.30f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Behaviour", meta=(ClampMin="100.0"))
+    float VerticalAmbushProbeRadius = 900.0f;
+
     // Surface traversal is intentionally tag-driven for the first playable map.
     // Add the LeaperClimbable tag to a building actor or mesh component.
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Leaper|Traversal")
@@ -488,6 +522,17 @@ private:
     bool bHasLastSeenLocation = false;
     FVector LastSeenLocation = FVector::ZeroVector;
 
+    FVector ActiveFlankLocation = FVector::ZeroVector;
+    bool bHasActiveFlankLocation = false;
+    FVector InvestigationGoal = FVector::ZeroVector;
+    bool bHasInvestigationGoal = false;
+    float NextFlankDecisionTime = 0.0f;
+    float NextSearchRetargetTime = 0.0f;
+    int32 FlankSide = 1;
+
+    FVector VerticalAmbushEntryLocation = FVector::ZeroVector;
+    bool bHasVerticalAmbushEntry = false;
+
     UPROPERTY(VisibleInstanceOnly, Category="Afterfall|Leaper|Alert")
     EAFLeaperAlertState AlertState = EAFLeaperAlertState::Scanning;
 
@@ -539,6 +584,10 @@ private:
     void PlayStateAnimation();
     void PlayFallbackAnimation(UAnimationAsset* Animation, bool bLoop, float PlayRate);
     bool GetCurrentThreatLocation(FVector& OutLocation) const;
+    bool BuildPredatorFlankLocation(AActor* TargetActor, FVector& OutLocation) const;
+    bool BuildPredatorSearchLocation(const FVector& ThreatLocation, FVector& OutLocation) const;
+    bool TryFindVerticalAmbushEntry(FVector& OutLocation) const;
+
     bool HasLineOfSightToPlayer(AActor* PlayerActor) const;
     FVector GetHeadWorldLocation() const;
 
