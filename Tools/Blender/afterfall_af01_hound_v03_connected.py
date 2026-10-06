@@ -128,8 +128,10 @@ def build_hound():
             plate('Receiver',[(.40,.112),(.43,.057),(.66,.067),(.71,.115)],s*.041,.017)
             for x in (.445,.50,.555,.61):box('Receiver',(x,s*.052,.08),(.032,.005,.009),'Dark',.001)
         box('HeatGauge',(.52,-.057,.146),(.20,.012,.031),'Dark',.004)
+        box('HeatGauge',(.52,-.043,.146),(.20,.035,.034),'Dark',.002)
         for i in range(12):box('HeatGauge',(.435+i*.014,-.065,.146),(.009,.004,.018),'Heat',.001)
         box('Inserts',(.49,0,.053),(.17,.04,.022),'Rubber')
+        box('Receiver',(.49,0,.09),(.17,.07,.070),'Dark')
         # Quad-port rectangular muzzle, assembled with genuine open recesses.
         for z in (.079,.201):box('Muzzle',(.742,0,z),(.082,.11,.016),'Armor')
         for y in (-.048,.048):box('Muzzle',(.742,y,.14),(.082,.014,.112),'Armor')
