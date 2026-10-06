@@ -2,15 +2,17 @@
 
 #include "Camera/CameraComponent.h"
 #include "Components/AFHealthComponent.h"
-#include "Enemies/AFLeaperEnemy.h"
-#include "EngineUtils.h"
+#include "Weapons/AFHoundWeapon.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Engine/World.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Inventory/AFInventoryComponent.h"
 #include "Kismet/GameplayStatics.h"
 
 AAFCharacter::AAFCharacter()
 {
-    PrimaryActorTick.bCanEverTick = false;
+    PrimaryActorTick.bCanEverTick = true;
+    DefaultWeaponClass = AAFHoundWeapon::StaticClass();
 
     bUseControllerRotationPitch = false;
     bUseControllerRotationYaw = false;
@@ -37,7 +39,11 @@ void AAFCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
     PlayerInputComponent->BindAxis(TEXT("MoveRight"), this, &AAFCharacter::MoveRight);
     PlayerInputComponent->BindAxis(TEXT("Turn"), this, &AAFCharacter::LookYaw);
     PlayerInputComponent->BindAxis(TEXT("LookUp"), this, &AAFCharacter::LookPitch);
-    PlayerInputComponent->BindAction(TEXT("Fire"), IE_Pressed, this, &AAFCharacter::FirePrimary);
+    PlayerInputComponent->BindAction(TEXT("Fire"), IE_Pressed, this, &AAFCharacter::StartPrimaryFire);
+    PlayerInputComponent->BindAction(TEXT("Fire"), IE_Released, this, &AAFCharacter::StopPrimaryFire);
+    PlayerInputComponent->BindAction(TEXT("Reload"), IE_Pressed, this, &AAFCharacter::ReloadWeapon);
+    PlayerInputComponent->BindAction(TEXT("Aim"), IE_Pressed, this, &AAFCharacter::StartAiming);
+    PlayerInputComponent->BindAction(TEXT("Aim"), IE_Released, this, &AAFCharacter::StopAiming);
 }
 
 void AAFCharacter::MoveForward(float Value)
@@ -70,40 +76,80 @@ void AAFCharacter::LookPitch(float Value)
 
 void AAFCharacter::FirePrimary()
 {
-    if (!FollowCamera || !GetWorld())
-    {
-        return;
-    }
+    if (IsValid(EquippedWeapon) && !HealthComponent->IsDead()) EquippedWeapon->TryFire();
+}
 
-    const FVector Start = FollowCamera->GetComponentLocation();
-    const FVector End = Start + (FollowCamera->GetForwardVector() * FireRange);
-
-    // The shot is a world event as soon as the weapon fires. Leapers decide
-    // whether they can hear it from their own hearing range and turn toward
-    // this location even when the trace misses.
-    for (TActorIterator<AAFLeaperEnemy> It(GetWorld()); It; ++It)
+void AAFCharacter::BeginPlay()
+{
+    Super::BeginPlay();
+    DefaultFOV=FollowCamera->FieldOfView;
+    HealthComponent->OnDeath.AddDynamic(this,&AAFCharacter::HandleWeaponOwnerDeath);
+    if (DefaultWeaponClass && GetWorld())
     {
-        if (AAFLeaperEnemy* Leaper = *It)
+        FActorSpawnParameters Params;
+        Params.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+        if (AAFWeaponBase* Weapon=GetWorld()->SpawnActor<AAFWeaponBase>(DefaultWeaponClass,GetActorTransform(),Params))
         {
-            Leaper->NotifyGunshotHeard(GetActorLocation(), 1.0f);
-        }
-    }
-
-    FHitResult Hit;
-    FCollisionQueryParams Params(SCENE_QUERY_STAT(AFPrimaryFire), true, this);
-
-    if (GetWorld()->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Params))
-    {
-        if (AActor* HitActor = Hit.GetActor())
-        {
-            UGameplayStatics::ApplyPointDamage(
-                HitActor,
-                PrimaryDamage,
-                FollowCamera->GetForwardVector(),
-                Hit,
-                GetController(),
-                this,
-                nullptr);
+            if (!EquipWeapon(Weapon)) Weapon->Destroy();
         }
     }
 }
+void AAFCharacter::EndPlay(const EEndPlayReason::Type Reason)
+{
+    if (IsValid(EquippedWeapon)) { EquippedWeapon->StopFire(); EquippedWeapon->Destroy(); }
+    Super::EndPlay(Reason);
+}
+void AAFCharacter::Tick(float Dt)
+{
+    Super::Tick(Dt);
+    FollowCamera->SetFieldOfView(FMath::FInterpTo(FollowCamera->FieldOfView,bIsAiming?AimFOV:DefaultFOV,Dt,12.f));
+}
+void AAFCharacter::StartPrimaryFire() { if (IsValid(EquippedWeapon) && !HealthComponent->IsDead()) EquippedWeapon->StartFire(); }
+void AAFCharacter::StopPrimaryFire() { if (IsValid(EquippedWeapon)) EquippedWeapon->StopFire(); }
+void AAFCharacter::ReloadWeapon() { if (IsValid(EquippedWeapon)) EquippedWeapon->Reload(); }
+void AAFCharacter::StartAiming()
+{
+    if (bIsAiming || !IsValid(EquippedWeapon) || HealthComponent->IsDead()) return;
+    bPreviousControllerYaw=bUseControllerRotationYaw;
+    bIsAiming=true; bUseControllerRotationYaw=true;
+    EquippedWeapon->SetAiming(true);
+}
+void AAFCharacter::StopAiming()
+{
+    if (!bIsAiming) return;
+    bIsAiming=false; bUseControllerRotationYaw=bPreviousControllerYaw;
+    if (IsValid(EquippedWeapon)) EquippedWeapon->SetAiming(false);
+}
+bool AAFCharacter::EquipWeapon(AAFWeaponBase* Weapon)
+{
+    if (!IsValid(Weapon) || HealthComponent->IsDead()) return false;
+    if (Weapon==EquippedWeapon) return true;
+    if (!Weapon->bCanBePickedUp || Weapon->GetOwner() || FVector::DistSquared(GetActorLocation(),Weapon->GetActorLocation())>FMath::Square(PickupDistance)) return false;
+    DropWeapon();
+    EquippedWeapon=Weapon;
+    Weapon->SetEquippedPawn(this);
+    if (GetMesh()->DoesSocketExist(WeaponAttachSocket))
+    {
+        Weapon->AttachToComponent(GetMesh(),FAttachmentTransformRules::SnapToTargetNotIncludingScale,WeaponAttachSocket);
+        Weapon->SetActorRelativeTransform(WeaponGripOffset);
+    }
+    else
+    {
+        Weapon->AttachToComponent(RootComponent,FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+        Weapon->SetActorRelativeLocation(FVector(25,18,40));
+        Weapon->SetActorRelativeRotation(FRotator::ZeroRotator);
+    }
+    OnEquippedWeaponChanged(Weapon);
+    return true;
+}
+void AAFCharacter::DropWeapon()
+{
+    StopAiming();
+    if (!IsValid(EquippedWeapon)) { EquippedWeapon=nullptr; return; }
+    AAFWeaponBase* Dropped=EquippedWeapon;
+    EquippedWeapon=nullptr;
+    Dropped->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+    Dropped->SetEquippedPawn(nullptr);
+    OnEquippedWeaponChanged(nullptr);
+}
+void AAFCharacter::HandleWeaponOwnerDeath() { DropWeapon(); }
