@@ -173,6 +173,12 @@ void AAFLeaperEnemy::BeginPlay()
     AlertStateEnteredTime = -1000000.0f;
     NextInvestigateMoveRequestTime = 0.0f;
     NextPounceAllowedTime = 0.0f;
+    NextFlankDecisionTime = 0.0f;
+    NextSearchRetargetTime = 0.0f;
+    FlankSide = FMath::RandBool() ? 1 : -1;
+    bHasActiveFlankLocation = false;
+    bHasInvestigationGoal = false;
+    bHasVerticalAmbushEntry = false;
 
     if (!GetController())
     {
@@ -573,6 +579,7 @@ void AAFLeaperEnemy::BeginSurfaceCrawl(
     }
 
     StopAIMovement();
+    bHasVerticalAmbushEntry = false;
 
     TraversalMode = EAFLeaperTraversalMode::SurfaceCrawl;
     SurfaceCrawlStartTime = GetWorld()->GetTimeSeconds();
@@ -1113,6 +1120,9 @@ void AAFLeaperEnemy::SetAlertState(EAFLeaperAlertState NewState)
     if (AlertState == EAFLeaperAlertState::Scanning)
     {
         NextPatrolRetargetTime = 0.0f;
+        bHasActiveFlankLocation = false;
+        bHasInvestigationGoal = false;
+        bHasVerticalAmbushEntry = false;
     }
     else if (AlertState == EAFLeaperAlertState::Alert)
     {
@@ -1121,6 +1131,15 @@ void AAFLeaperEnemy::SetAlertState(EAFLeaperAlertState NewState)
         AlertStateEnteredTime = Now;
         BodyTurnStartTime = Now + FMath::Max(0.0f, AlertBodyTurnDelay);
         NextInvestigateMoveRequestTime = 0.0f;
+        NextSearchRetargetTime = Now;
+        bHasActiveFlankLocation = false;
+        bHasInvestigationGoal = false;
+        bHasVerticalAmbushEntry = false;
+    }
+    else if (AlertState == EAFLeaperAlertState::Attacking)
+    {
+        bHasInvestigationGoal = false;
+        NextFlankDecisionTime = Now;
     }
 
     PlayStateAnimation();
@@ -1672,6 +1691,172 @@ bool AAFLeaperEnemy::GetCurrentThreatLocation(FVector& OutLocation) const
     return false;
 }
 
+bool AAFLeaperEnemy::BuildPredatorFlankLocation(
+    AActor* TargetActor,
+    FVector& OutLocation)
+{
+    if (!TargetActor || !GetWorld())
+    {
+        return false;
+    }
+
+    UNavigationSystemV1* Nav =
+        FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+
+    if (!Nav)
+    {
+        return false;
+    }
+
+    FVector ToTarget =
+        TargetActor->GetActorLocation() - GetActorLocation();
+    ToTarget.Z = 0.0f;
+
+    if (!ToTarget.Normalize())
+    {
+        return false;
+    }
+
+    FlankSide *= -1;
+
+    const FVector Side =
+        FVector::CrossProduct(FVector::UpVector, ToTarget).GetSafeNormal()
+        * static_cast<float>(FlankSide);
+
+    FVector TargetForward =
+        TargetActor->GetActorForwardVector().GetSafeNormal2D();
+
+    if (TargetForward.IsNearlyZero())
+    {
+        TargetForward = ToTarget;
+    }
+
+    const FVector Desired =
+        TargetActor->GetActorLocation()
+        + Side * FMath::Max(100.0f, FlankDistance)
+        - TargetForward * FMath::Max(0.0f, FlankBehindDistance);
+
+    FNavLocation Projected;
+    if (!Nav->ProjectPointToNavigation(
+            Desired,
+            Projected,
+            FVector(420.0f, 420.0f, 360.0f)))
+    {
+        return false;
+    }
+
+    OutLocation = Projected.Location;
+    return true;
+}
+
+bool AAFLeaperEnemy::BuildPredatorSearchLocation(
+    const FVector& ThreatLocation,
+    FVector& OutLocation) const
+{
+    if (!GetWorld())
+    {
+        return false;
+    }
+
+    UNavigationSystemV1* Nav =
+        FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+
+    if (!Nav)
+    {
+        return false;
+    }
+
+    FVector ToThreat = ThreatLocation - GetActorLocation();
+    ToThreat.Z = 0.0f;
+
+    if (!ToThreat.Normalize())
+    {
+        ToThreat = GetActorForwardVector().GetSafeNormal2D();
+    }
+
+    const float SideSign = FMath::RandBool() ? 1.0f : -1.0f;
+    const FVector Side =
+        FVector::CrossProduct(FVector::UpVector, ToThreat).GetSafeNormal()
+        * SideSign;
+
+    const float Offset = FMath::Max(100.0f, LostSightSearchOffset);
+    const FVector Desired =
+        ThreatLocation
+        + Side * Offset
+        + ToThreat * FMath::FRandRange(-0.25f, 0.35f) * Offset;
+
+    FNavLocation Projected;
+    if (!Nav->ProjectPointToNavigation(
+            Desired,
+            Projected,
+            FVector(500.0f, 500.0f, 360.0f)))
+    {
+        return false;
+    }
+
+    OutLocation = Projected.Location;
+    return true;
+}
+
+bool AAFLeaperEnemy::TryFindVerticalAmbushEntry(
+    FVector& OutLocation) const
+{
+    if (!GetWorld() ||
+        !bEnableSurfaceTraversal ||
+        !bEnableVerticalAmbushRoutes)
+    {
+        return false;
+    }
+
+    const FVector Start =
+        GetActorLocation() + FVector(0.0f, 0.0f, 35.0f);
+    const float Radius = FMath::Max(100.0f, VerticalAmbushProbeRadius);
+
+    FVector PreferredDirection = GetActorForwardVector().GetSafeNormal2D();
+    if (VisualTarget.IsValid())
+    {
+        PreferredDirection =
+            (VisualTarget->GetActorLocation() - GetActorLocation())
+            .GetSafeNormal2D();
+    }
+
+    if (PreferredDirection.IsNearlyZero())
+    {
+        PreferredDirection = FVector::ForwardVector;
+    }
+
+    // Search forward first, then fan out around the Leaper. Only tagged
+    // climbable geometry (or prototype climb-all geometry) is accepted.
+    static const float AngleOffsets[] =
+    {
+        0.0f, 35.0f, -35.0f, 70.0f, -70.0f, 110.0f, -110.0f, 180.0f
+    };
+
+    for (const float Angle : AngleOffsets)
+    {
+        const FVector Direction =
+            PreferredDirection.RotateAngleAxis(Angle, FVector::UpVector)
+            .GetSafeNormal();
+
+        FHitResult Hit;
+        if (TraceForClimbableSurface(
+                Start,
+                Start + Direction * Radius,
+                Hit))
+        {
+            const FVector Normal = Hit.ImpactNormal.GetSafeNormal();
+            if (FMath::Abs(Normal.Z) <= MaxClimbEntryNormalZ)
+            {
+                OutLocation =
+                    Hit.ImpactPoint + Normal * FMath::Max(45.0f, SurfaceClearance + 35.0f);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 void AAFLeaperEnemy::UpdateScanningPatrol()
 {
     if (!GetWorld())
@@ -1759,6 +1944,7 @@ void AAFLeaperEnemy::UpdateAlertInvestigation()
             bInvestigatingThreat = false;
             PlayStateAnimation();
         }
+        bHasInvestigationGoal = false;
         return;
     }
 
@@ -1775,7 +1961,35 @@ void AAFLeaperEnemy::UpdateAlertInvestigation()
         return;
     }
 
-    FVector FlatDelta = ThreatLocation - GetActorLocation();
+    FVector Destination = ThreatLocation;
+
+    if (bEnablePredatorFlanking)
+    {
+        const bool bReachedSearchGoal =
+            bHasInvestigationGoal &&
+            FVector::Dist2D(GetActorLocation(), InvestigationGoal) <=
+                FMath::Max(1.0f, InvestigateAcceptanceRadius) * 1.35f;
+
+        if (!bHasInvestigationGoal ||
+            (bReachedSearchGoal && Now >= NextSearchRetargetTime))
+        {
+            FVector NewSearchGoal;
+            if (BuildPredatorSearchLocation(ThreatLocation, NewSearchGoal))
+            {
+                InvestigationGoal = NewSearchGoal;
+                bHasInvestigationGoal = true;
+                NextSearchRetargetTime =
+                    Now + FMath::Max(0.1f, LostSightSearchRetargetInterval);
+            }
+        }
+
+        if (bHasInvestigationGoal)
+        {
+            Destination = InvestigationGoal;
+        }
+    }
+
+    FVector FlatDelta = Destination - GetActorLocation();
     FlatDelta.Z = 0.0f;
 
     if (FlatDelta.SizeSquared() <=
@@ -1809,7 +2023,7 @@ void AAFLeaperEnemy::UpdateAlertInvestigation()
     }
 
     AI->MoveToLocation(
-        ThreatLocation,
+        Destination,
         FMath::Max(1.0f, InvestigateAcceptanceRadius),
         true,
         true,
@@ -1831,7 +2045,8 @@ void AAFLeaperEnemy::UpdateAttackPursuit()
     {
         return;
     }
-    NextAttackMoveRequestTime = Now + FMath::Max(0.05f, AttackMoveRequestInterval);
+    NextAttackMoveRequestTime =
+        Now + FMath::Max(0.05f, AttackMoveRequestInterval);
 
     AAIController* AI = Cast<AAIController>(GetController());
     if (!AI)
@@ -1842,10 +2057,88 @@ void AAFLeaperEnemy::UpdateAttackPursuit()
     if (VisualTarget.IsValid())
     {
         AActor* Target = VisualTarget.Get();
-        const float HorizontalDistance = FVector(
-            Target->GetActorLocation().X - GetActorLocation().X,
-            Target->GetActorLocation().Y - GetActorLocation().Y,
-            0.0f).Size();
+        const float HorizontalDistance = FVector::Dist2D(
+            Target->GetActorLocation(),
+            GetActorLocation());
+
+        // Optional vertical ambush: if wall traversal is enabled, occasionally
+        // break off the normal NavMesh chase and deliberately head for a nearby
+        // tagged wall. The existing surface-crawl system takes over on contact.
+        if (bEnableSurfaceTraversal &&
+            bEnableVerticalAmbushRoutes &&
+            TraversalMode == EAFLeaperTraversalMode::Ground &&
+            !bHasVerticalAmbushEntry &&
+            Now >= NextFlankDecisionTime &&
+            FMath::FRand() <= VerticalAmbushChance)
+        {
+            FVector EntryLocation;
+            if (TryFindVerticalAmbushEntry(EntryLocation))
+            {
+                VerticalAmbushEntryLocation = EntryLocation;
+                bHasVerticalAmbushEntry = true;
+            }
+        }
+
+        if (bHasVerticalAmbushEntry &&
+            TraversalMode == EAFLeaperTraversalMode::Ground)
+        {
+            FVector ToEntry = VerticalAmbushEntryLocation - GetActorLocation();
+            ToEntry.Z = 0.0f;
+
+            if (ToEntry.Size2D() > 120.0f)
+            {
+                StopAIMovement();
+                AddMovementInput(ToEntry.GetSafeNormal2D(), 1.0f, true);
+                return;
+            }
+
+            bHasVerticalAmbushEntry = false;
+        }
+
+        if (bEnablePredatorFlanking && Now >= NextFlankDecisionTime)
+        {
+            NextFlankDecisionTime =
+                Now + FMath::Max(0.1f, FlankRetargetInterval);
+
+            if (HorizontalDistance > FMath::Max(650.0f, MinPounceRange) &&
+                FMath::FRand() <= FlankChance)
+            {
+                FVector NewFlankLocation;
+                if (BuildPredatorFlankLocation(Target, NewFlankLocation))
+                {
+                    ActiveFlankLocation = NewFlankLocation;
+                    bHasActiveFlankLocation = true;
+                }
+            }
+            else
+            {
+                bHasActiveFlankLocation = false;
+            }
+        }
+
+        if (bHasActiveFlankLocation)
+        {
+            const float DistanceToFlank = FVector::Dist2D(
+                GetActorLocation(),
+                ActiveFlankLocation);
+
+            if (DistanceToFlank >
+                FMath::Max(10.0f, FlankAcceptanceRadius))
+            {
+                AI->MoveToLocation(
+                    ActiveFlankLocation,
+                    FMath::Max(10.0f, FlankAcceptanceRadius),
+                    true,
+                    true,
+                    true,
+                    false,
+                    nullptr,
+                    true);
+                return;
+            }
+
+            bHasActiveFlankLocation = false;
+        }
 
         if (bEnablePounce &&
             HorizontalDistance >= MinPounceRange &&
