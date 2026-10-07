@@ -232,6 +232,12 @@ void AAFCharacter::Tick(float Dt)
         AimPitch = 0.f;
     }
 
+    bIsInAir =
+        TraversalState == EAFTraversalState::None &&
+        GetCharacterMovement() &&
+        GetCharacterMovement()->IsFalling();
+    VerticalVelocity = GetVelocity().Z;
+
     if (TraversalState == EAFTraversalState::Vaulting ||
         TraversalState == EAFTraversalState::Mantling)
     {
@@ -385,6 +391,8 @@ void AAFCharacter::DropFromLedge()
 
     HangingWallNormal = FVector::ZeroVector;
     HangingLedgeTop = FVector::ZeroVector;
+    TraversalAlpha = 0.0f;
+    SetTraversalWeaponStowed(false);
 }
 
 bool AAFCharacter::TryContextTraversal()
@@ -478,6 +486,7 @@ void AAFCharacter::UpdateTraversal(float DeltaSeconds)
         TraversalElapsed / FMath::Max(0.01f, TraversalDurationActive),
         0.f,
         1.f);
+    TraversalAlpha = Alpha;
 
     const FVector MidPoint =
         (TraversalStartLocation + TraversalTargetLocation) * 0.5f
@@ -833,6 +842,7 @@ void AAFCharacter::StartTraversalMove(
 
     StopAiming();
     StopPrimaryFire();
+    SetTraversalWeaponStowed(true);
 
     TraversalState = NewState;
     TraversalStartLocation = GetActorLocation();
@@ -878,6 +888,7 @@ void AAFCharacter::EnterLedgeHang(
 
     StopAiming();
     StopPrimaryFire();
+    SetTraversalWeaponStowed(true);
 
     HangingWallNormal = WallHit.ImpactNormal.GetSafeNormal();
     HangingLedgeTop = TopHit.ImpactPoint;
@@ -921,14 +932,35 @@ void AAFCharacter::ClimbFromLedge()
     const float HalfHeight =
         GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
-    FVector Target =
-        HangingLedgeTop
-        - HangingWallNormal.GetSafeNormal2D() * (Radius + 28.0f);
+    const FVector IntoLedge = -HangingWallNormal.GetSafeNormal2D();
 
-    Target.Z =
-        HangingLedgeTop.Z + HalfHeight + 2.0f;
+    FVector Target = FVector::ZeroVector;
+    bool bFoundClimbTarget = false;
 
-    if (!CanOccupyCapsuleAt(Target))
+    const float CandidateDepths[] =
+    {
+        Radius + 28.0f,
+        Radius + 65.0f,
+        Radius + 105.0f,
+        Radius + 145.0f
+    };
+
+    for (const float Depth : CandidateDepths)
+    {
+        FVector Candidate =
+            HangingLedgeTop + IntoLedge * Depth;
+        Candidate.Z =
+            HangingLedgeTop.Z + HalfHeight + 3.0f;
+
+        if (CanOccupyCapsuleAt(Candidate))
+        {
+            Target = Candidate;
+            bFoundClimbTarget = true;
+            break;
+        }
+    }
+
+    if (!bFoundClimbTarget)
     {
         return;
     }
@@ -958,6 +990,7 @@ void AAFCharacter::FinishTraversalMove()
         ETeleportType::None);
 
     TraversalState = EAFTraversalState::None;
+    TraversalAlpha = 0.0f;
 
     if (GetCharacterMovement())
     {
@@ -970,8 +1003,20 @@ void AAFCharacter::FinishTraversalMove()
 
     HangingWallNormal = FVector::ZeroVector;
     HangingLedgeTop = FVector::ZeroVector;
+    SetTraversalWeaponStowed(false);
 
     OnTraversalStateChanged(TraversalState);
+}
+
+void AAFCharacter::SetTraversalWeaponStowed(bool bStowed)
+{
+    if (!bHideWeaponDuringTraversal || !IsValid(EquippedWeapon))
+    {
+        return;
+    }
+
+    EquippedWeapon->SetActorHiddenInGame(bStowed);
+    EquippedWeapon->SetActorEnableCollision(!bStowed);
 }
 
 FVector AAFCharacter::GetTraversalForward() const
