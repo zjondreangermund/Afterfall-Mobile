@@ -177,9 +177,6 @@ public:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
     bool bAutoSpawnTraversalTestCourseInEditor = true;
 
-    UPROPERTY(BlueprintAssignable, Category="Afterfall|Traversal")
-    FSimpleMulticastDelegate OnTraversalFinishedNative;
-
     UFUNCTION(BlueprintImplementableEvent, Category="Afterfall|Traversal")
     void OnTraversalStateChanged(EAFTraversalState NewState);
 
