@@ -158,10 +158,19 @@ public:
     TSoftObjectPtr<UAnimSequenceBase> JumpStartAnimation;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump")
+    TSoftObjectPtr<UAnimSequenceBase> JumpStartLoopAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump")
+    TSoftObjectPtr<UAnimSequenceBase> JumpApexAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump")
     TSoftObjectPtr<UAnimSequenceBase> JumpFallLoopAnimation;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump")
     TSoftObjectPtr<UAnimSequenceBase> JumpLandAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump", meta=(ClampMin="0.0"))
+    float JumpApexVelocityThreshold = 85.0f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump", meta=(ClampMin="0.1"))
     float JumpVisualPlayRate = 1.0f;
@@ -259,8 +268,22 @@ private:
     float MoveRightInput = 0.f;
     float LedgeGrabScanCooldown = 0.f;
 
+    enum class EAFJumpVisualPhase : uint8
+    {
+        None,
+        Start,
+        RisingLoop,
+        Apex,
+        Falling,
+        Landing
+    };
+
     bool bJumpVisualActive = false;
     bool bFallLoopVisualActive = false;
+    EAFJumpVisualPhase JumpVisualPhase = EAFJumpVisualPhase::None;
+    float JumpVisualPhaseElapsed = 0.0f;
+    float JumpStartVisualDuration = 0.0f;
+    float JumpApexVisualDuration = 0.0f;
     TSubclassOf<UAnimInstance> SavedLocomotionAnimClass;
     FTimerHandle JumpVisualTimer;
 
@@ -289,6 +312,8 @@ private:
     void FinishTraversalMove();
     void SetTraversalWeaponStowed(bool bStowed);
     bool PlayFullBodySequence(TSoftObjectPtr<UAnimSequenceBase> Sequence, bool bLoop);
+    void SetJumpVisualPhase(EAFJumpVisualPhase NewPhase);
+    void UpdateJumpVisual(float DeltaSeconds);
     void RestoreLocomotionAnimationBlueprint();
     FVector GetTraversalForward() const;
 };
