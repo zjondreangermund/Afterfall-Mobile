@@ -1,5 +1,7 @@
 #include "Player/AFCharacter.h"
 
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimSequenceBase.h"
 #include "Camera/CameraComponent.h"
 #include "CollisionShape.h"
 #include "Components/AFHealthComponent.h"
@@ -13,11 +15,19 @@
 #include "Kismet/GameplayStatics.h"
 #include "Weapons/AFHoundWeapon.h"
 #include "World/AFTraversalTestCourse.h"
+#include "TimerManager.h"
 
 AAFCharacter::AAFCharacter()
 {
     PrimaryActorTick.bCanEverTick = true;
     DefaultWeaponClass = AAFHoundWeapon::StaticClass();
+
+    JumpStartAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Start.MM_Rifle_Jump_Start")));
+    JumpFallLoopAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Fall_Loop.MM_Rifle_Jump_Fall_Loop")));
+    JumpLandAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Fall_Land.MM_Rifle_Jump_Fall_Land")));
 
     bUseControllerRotationPitch = false;
     bUseControllerRotationYaw = false;
@@ -124,6 +134,11 @@ void AAFCharacter::BeginPlay()
     Super::BeginPlay();
 
     DefaultFOV = FollowCamera->FieldOfView;
+
+    if (GetMesh())
+    {
+        SavedLocomotionAnimClass = GetMesh()->GetAnimClass();
+    }
 
     CameraBoom->TargetArmLength = NormalCameraArmLength;
     CameraBoom->SocketOffset = FVector(
@@ -238,6 +253,19 @@ void AAFCharacter::Tick(float Dt)
         GetCharacterMovement()->IsFalling();
     VerticalVelocity = GetVelocity().Z;
 
+    if (bJumpVisualActive &&
+        TraversalState == EAFTraversalState::None &&
+        GetCharacterMovement() &&
+        GetCharacterMovement()->IsFalling() &&
+        VerticalVelocity <= 25.0f &&
+        !bFallLoopVisualActive)
+    {
+        if (PlayFullBodySequence(JumpFallLoopAnimation, true))
+        {
+            bFallLoopVisualActive = true;
+        }
+    }
+
     if (TraversalState == EAFTraversalState::Vaulting ||
         TraversalState == EAFTraversalState::Mantling)
     {
@@ -258,6 +286,43 @@ void AAFCharacter::Tick(float Dt)
             TryAutoGrabLedge();
         }
     }
+}
+
+
+void AAFCharacter::Landed(const FHitResult& Hit)
+{
+    Super::Landed(Hit);
+
+    bIsInAir = false;
+    VerticalVelocity = 0.0f;
+
+    if (TraversalState != EAFTraversalState::None || !bJumpVisualActive)
+    {
+        return;
+    }
+
+    UAnimSequenceBase* LandSequence = JumpLandAnimation.LoadSynchronous();
+    if (!LandSequence)
+    {
+        RestoreLocomotionAnimationBlueprint();
+        return;
+    }
+
+    if (!PlayFullBodySequence(JumpLandAnimation, false))
+    {
+        RestoreLocomotionAnimationBlueprint();
+        return;
+    }
+
+    const float Duration =
+        LandSequence->GetPlayLength() / FMath::Max(0.1f, JumpVisualPlayRate);
+
+    GetWorldTimerManager().SetTimer(
+        JumpVisualTimer,
+        this,
+        &AAFCharacter::RestoreLocomotionAnimationBlueprint,
+        FMath::Max(0.12f, Duration),
+        false);
 }
 
 void AAFCharacter::StartPrimaryFire()
@@ -360,6 +425,8 @@ void AAFCharacter::TraversalJumpPressed()
         return;
     }
 
+    bFallLoopVisualActive = false;
+    PlayFullBodySequence(JumpStartAnimation, false);
     Jump();
 }
 
@@ -388,6 +455,12 @@ void AAFCharacter::DropFromLedge()
         HangingWallNormal.GetSafeNormal2D() * 140.0f + FVector(0.0f, 0.0f, -90.0f),
         true,
         true);
+
+    bFallLoopVisualActive = false;
+    if (PlayFullBodySequence(JumpFallLoopAnimation, true))
+    {
+        bFallLoopVisualActive = true;
+    }
 
     HangingWallNormal = FVector::ZeroVector;
     HangingLedgeTop = FVector::ZeroVector;
@@ -842,6 +915,7 @@ void AAFCharacter::StartTraversalMove(
 
     StopAiming();
     StopPrimaryFire();
+    RestoreLocomotionAnimationBlueprint();
     SetTraversalWeaponStowed(true);
 
     TraversalState = NewState;
@@ -888,6 +962,7 @@ void AAFCharacter::EnterLedgeHang(
 
     StopAiming();
     StopPrimaryFire();
+    RestoreLocomotionAnimationBlueprint();
     SetTraversalWeaponStowed(true);
 
     HangingWallNormal = WallHit.ImpactNormal.GetSafeNormal();
@@ -1006,6 +1081,68 @@ void AAFCharacter::FinishTraversalMove()
     SetTraversalWeaponStowed(false);
 
     OnTraversalStateChanged(TraversalState);
+}
+
+
+bool AAFCharacter::PlayFullBodySequence(
+    TSoftObjectPtr<UAnimSequenceBase> Sequence,
+    bool bLoop)
+{
+    if (!GetMesh())
+    {
+        return false;
+    }
+
+    UAnimSequenceBase* LoadedSequence = Sequence.LoadSynchronous();
+    if (!LoadedSequence)
+    {
+        return false;
+    }
+
+    if (GetWorld())
+    {
+        GetWorldTimerManager().ClearTimer(JumpVisualTimer);
+    }
+
+    if (!SavedLocomotionAnimClass)
+    {
+        SavedLocomotionAnimClass = GetMesh()->GetAnimClass();
+    }
+
+    GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+    GetMesh()->PlayAnimation(LoadedSequence, bLoop);
+
+    if (UAnimSingleNodeInstance* SingleNode =
+        GetMesh()->GetSingleNodeInstance())
+    {
+        SingleNode->SetPlayRate(FMath::Max(0.1f, JumpVisualPlayRate));
+    }
+
+    bJumpVisualActive = true;
+    return true;
+}
+
+void AAFCharacter::RestoreLocomotionAnimationBlueprint()
+{
+    if (GetWorld())
+    {
+        GetWorldTimerManager().ClearTimer(JumpVisualTimer);
+    }
+
+    if (GetMesh())
+    {
+        if (SavedLocomotionAnimClass)
+        {
+            GetMesh()->SetAnimInstanceClass(SavedLocomotionAnimClass);
+        }
+        else
+        {
+            GetMesh()->SetAnimationMode(EAnimationMode::AnimationBlueprint);
+        }
+    }
+
+    bJumpVisualActive = false;
+    bFallLoopVisualActive = false;
 }
 
 void AAFCharacter::SetTraversalWeaponStowed(bool bStowed)
