@@ -25,6 +25,10 @@ AAFCharacter::AAFCharacter()
 
     JumpStartAnimation = TSoftObjectPtr<UAnimSequenceBase>(
         FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Start.MM_Rifle_Jump_Start")));
+    JumpStartLoopAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Start_Loop.MM_Rifle_Jump_Start_Loop")));
+    JumpApexAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Apex.MM_Rifle_Jump_Apex")));
     JumpFallLoopAnimation = TSoftObjectPtr<UAnimSequenceBase>(
         FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Fall_Loop.MM_Rifle_Jump_Fall_Loop")));
     JumpLandAnimation = TSoftObjectPtr<UAnimSequenceBase>(
@@ -254,18 +258,7 @@ void AAFCharacter::Tick(float Dt)
         GetCharacterMovement()->IsFalling();
     VerticalVelocity = GetVelocity().Z;
 
-    if (bJumpVisualActive &&
-        TraversalState == EAFTraversalState::None &&
-        GetCharacterMovement() &&
-        GetCharacterMovement()->IsFalling() &&
-        VerticalVelocity <= 25.0f &&
-        !bFallLoopVisualActive)
-    {
-        if (PlayFullBodySequence(JumpFallLoopAnimation, true))
-        {
-            bFallLoopVisualActive = true;
-        }
-    }
+    UpdateJumpVisual(Dt);
 
     if (TraversalState == EAFTraversalState::Vaulting ||
         TraversalState == EAFTraversalState::Mantling)
@@ -302,28 +295,7 @@ void AAFCharacter::Landed(const FHitResult& Hit)
         return;
     }
 
-    UAnimSequenceBase* LandSequence = JumpLandAnimation.LoadSynchronous();
-    if (!LandSequence)
-    {
-        RestoreLocomotionAnimationBlueprint();
-        return;
-    }
-
-    if (!PlayFullBodySequence(JumpLandAnimation, false))
-    {
-        RestoreLocomotionAnimationBlueprint();
-        return;
-    }
-
-    const float Duration =
-        LandSequence->GetPlayLength() / FMath::Max(0.1f, JumpVisualPlayRate);
-
-    GetWorldTimerManager().SetTimer(
-        JumpVisualTimer,
-        this,
-        &AAFCharacter::RestoreLocomotionAnimationBlueprint,
-        FMath::Max(0.12f, Duration),
-        false);
+    SetJumpVisualPhase(EAFJumpVisualPhase::Landing);
 }
 
 void AAFCharacter::StartPrimaryFire()
@@ -427,7 +399,9 @@ void AAFCharacter::TraversalJumpPressed()
     }
 
     bFallLoopVisualActive = false;
-    PlayFullBodySequence(JumpStartAnimation, false);
+    JumpVisualPhase = EAFJumpVisualPhase::None;
+    JumpVisualPhaseElapsed = 0.0f;
+    SetJumpVisualPhase(EAFJumpVisualPhase::Start);
     Jump();
 }
 
@@ -458,10 +432,9 @@ void AAFCharacter::DropFromLedge()
         true);
 
     bFallLoopVisualActive = false;
-    if (PlayFullBodySequence(JumpFallLoopAnimation, true))
-    {
-        bFallLoopVisualActive = true;
-    }
+    JumpVisualPhase = EAFJumpVisualPhase::None;
+    JumpVisualPhaseElapsed = 0.0f;
+    SetJumpVisualPhase(EAFJumpVisualPhase::Falling);
 
     HangingWallNormal = FVector::ZeroVector;
     HangingLedgeTop = FVector::ZeroVector;
@@ -1085,6 +1058,144 @@ void AAFCharacter::FinishTraversalMove()
 }
 
 
+void AAFCharacter::SetJumpVisualPhase(EAFJumpVisualPhase NewPhase)
+{
+    if (JumpVisualPhase == NewPhase)
+    {
+        return;
+    }
+
+    JumpVisualPhase = NewPhase;
+    JumpVisualPhaseElapsed = 0.0f;
+    bFallLoopVisualActive = NewPhase == EAFJumpVisualPhase::Falling;
+
+    switch (NewPhase)
+    {
+        case EAFJumpVisualPhase::Start:
+        {
+            UAnimSequenceBase* Sequence = JumpStartAnimation.LoadSynchronous();
+            JumpStartVisualDuration = Sequence
+                ? Sequence->GetPlayLength() / FMath::Max(0.1f, JumpVisualPlayRate)
+                : 0.18f;
+
+            if (!PlayFullBodySequence(JumpStartAnimation, false))
+            {
+                RestoreLocomotionAnimationBlueprint();
+            }
+            break;
+        }
+
+        case EAFJumpVisualPhase::RisingLoop:
+            if (!PlayFullBodySequence(JumpStartLoopAnimation, true))
+            {
+                // If this specific loop is unavailable, hold the start pose only
+                // briefly and let the apex/fall phases take over.
+                PlayFullBodySequence(JumpStartAnimation, true);
+            }
+            break;
+
+        case EAFJumpVisualPhase::Apex:
+        {
+            UAnimSequenceBase* Sequence = JumpApexAnimation.LoadSynchronous();
+            JumpApexVisualDuration = Sequence
+                ? Sequence->GetPlayLength() / FMath::Max(0.1f, JumpVisualPlayRate)
+                : 0.12f;
+
+            if (!PlayFullBodySequence(JumpApexAnimation, false))
+            {
+                SetJumpVisualPhase(EAFJumpVisualPhase::Falling);
+            }
+            break;
+        }
+
+        case EAFJumpVisualPhase::Falling:
+            if (!PlayFullBodySequence(JumpFallLoopAnimation, true))
+            {
+                RestoreLocomotionAnimationBlueprint();
+            }
+            break;
+
+        case EAFJumpVisualPhase::Landing:
+        {
+            UAnimSequenceBase* Sequence = JumpLandAnimation.LoadSynchronous();
+            if (!Sequence || !PlayFullBodySequence(JumpLandAnimation, false))
+            {
+                RestoreLocomotionAnimationBlueprint();
+                return;
+            }
+
+            const float Duration =
+                Sequence->GetPlayLength() / FMath::Max(0.1f, JumpVisualPlayRate);
+
+            GetWorldTimerManager().SetTimer(
+                JumpVisualTimer,
+                this,
+                &AAFCharacter::RestoreLocomotionAnimationBlueprint,
+                FMath::Max(0.10f, Duration * 0.92f),
+                false);
+            break;
+        }
+
+        case EAFJumpVisualPhase::None:
+        default:
+            RestoreLocomotionAnimationBlueprint();
+            break;
+    }
+}
+
+void AAFCharacter::UpdateJumpVisual(float DeltaSeconds)
+{
+    if (!bJumpVisualActive ||
+        TraversalState != EAFTraversalState::None ||
+        !GetCharacterMovement() ||
+        !GetCharacterMovement()->IsFalling())
+    {
+        return;
+    }
+
+    JumpVisualPhaseElapsed += FMath::Max(0.0f, DeltaSeconds);
+
+    switch (JumpVisualPhase)
+    {
+        case EAFJumpVisualPhase::Start:
+            // The original bug was caused by letting this non-looping clip end
+            // while the character was still rising. Move into the authored
+            // rising loop before the start clip can freeze on its last frame.
+            if (VerticalVelocity <= JumpApexVelocityThreshold)
+            {
+                SetJumpVisualPhase(EAFJumpVisualPhase::Apex);
+            }
+            else if (JumpVisualPhaseElapsed >=
+                     FMath::Max(0.08f, JumpStartVisualDuration * 0.82f))
+            {
+                SetJumpVisualPhase(EAFJumpVisualPhase::RisingLoop);
+            }
+            break;
+
+        case EAFJumpVisualPhase::RisingLoop:
+            if (VerticalVelocity <= JumpApexVelocityThreshold)
+            {
+                SetJumpVisualPhase(EAFJumpVisualPhase::Apex);
+            }
+            break;
+
+        case EAFJumpVisualPhase::Apex:
+            if (VerticalVelocity < -JumpApexVelocityThreshold ||
+                JumpVisualPhaseElapsed >=
+                    FMath::Max(0.08f, JumpApexVisualDuration * 0.75f))
+            {
+                SetJumpVisualPhase(EAFJumpVisualPhase::Falling);
+            }
+            break;
+
+        case EAFJumpVisualPhase::Falling:
+        case EAFJumpVisualPhase::Landing:
+        case EAFJumpVisualPhase::None:
+        default:
+            break;
+    }
+}
+
 bool AAFCharacter::PlayFullBodySequence(
     TSoftObjectPtr<UAnimSequenceBase> Sequence,
     bool bLoop)
@@ -1144,6 +1255,8 @@ void AAFCharacter::RestoreLocomotionAnimationBlueprint()
 
     bJumpVisualActive = false;
     bFallLoopVisualActive = false;
+    JumpVisualPhase = EAFJumpVisualPhase::None;
+    JumpVisualPhaseElapsed = 0.0f;
 }
 
 void AAFCharacter::SetTraversalWeaponStowed(bool bStowed)
