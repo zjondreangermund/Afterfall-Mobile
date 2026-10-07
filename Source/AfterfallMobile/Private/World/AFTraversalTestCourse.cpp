@@ -10,6 +10,7 @@ AAFTraversalTestCourse::AAFTraversalTestCourse()
     PrimaryActorTick.bCanEverTick = false;
 
     Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+    Root->SetMobility(EComponentMobility::Static);
     SetRootComponent(Root);
 
     Geometry = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("Geometry"));
