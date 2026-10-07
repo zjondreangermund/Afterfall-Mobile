@@ -9,6 +9,8 @@ class USpringArmComponent;
 class UAFHealthComponent;
 class UAFInventoryComponent;
 class AAFWeaponBase;
+class UAnimSequenceBase;
+class UAnimInstance;
 
 UENUM(BlueprintType)
 enum class EAFTraversalState : uint8
@@ -150,6 +152,20 @@ public:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation")
     bool bHideWeaponDuringTraversal = true;
 
+    // Existing Manny rifle jump assets are used automatically so normal jumps
+    // no longer play the ground locomotion pose in mid-air.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump")
+    TSoftObjectPtr<UAnimSequenceBase> JumpStartAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump")
+    TSoftObjectPtr<UAnimSequenceBase> JumpFallLoopAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump")
+    TSoftObjectPtr<UAnimSequenceBase> JumpLandAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump", meta=(ClampMin="0.1"))
+    float JumpVisualPlayRate = 1.0f;
+
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
     bool bAutoLedgeGrab = true;
 
@@ -210,6 +226,7 @@ public:
 protected:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+    virtual void Landed(const FHitResult& Hit) override;
 
     UFUNCTION()
     void HandleWeaponOwnerDeath();
@@ -242,6 +259,11 @@ private:
     float MoveRightInput = 0.f;
     float LedgeGrabScanCooldown = 0.f;
 
+    bool bJumpVisualActive = false;
+    bool bFallLoopVisualActive = false;
+    TSubclassOf<UAnimInstance> SavedLocomotionAnimClass;
+    FTimerHandle JumpVisualTimer;
+
     void UpdateTraversal(float DeltaSeconds);
     void UpdateHanging(float DeltaSeconds);
     bool TryAutoGrabLedge();
@@ -266,5 +288,7 @@ private:
     void ClimbFromLedge();
     void FinishTraversalMove();
     void SetTraversalWeaponStowed(bool bStowed);
+    bool PlayFullBodySequence(TSoftObjectPtr<UAnimSequenceBase> Sequence, bool bLoop);
+    void RestoreLocomotionAnimationBlueprint();
     FVector GetTraversalForward() const;
 };
