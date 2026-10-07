@@ -1,6 +1,7 @@
 #include "Player/AFCharacter.h"
 
 #include "Camera/CameraComponent.h"
+#include "CollisionShape.h"
 #include "Components/AFHealthComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -371,8 +372,11 @@ void AAFCharacter::DropFromLedge()
     TraversalState = EAFTraversalState::None;
     OnTraversalStateChanged(TraversalState);
 
+    GetCharacterMovement()->GravityScale = 1.0f;
     GetCharacterMovement()->SetMovementMode(MOVE_Falling);
+    GetCharacterMovement()->bOrientRotationToMovement = true;
     GetCharacterMovement()->Velocity = FVector::ZeroVector;
+    bUseControllerRotationYaw = false;
 
     LaunchCharacter(
         HangingWallNormal.GetSafeNormal2D() * 140.0f + FVector(0.0f, 0.0f, -90.0f),
