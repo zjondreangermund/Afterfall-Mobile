@@ -135,6 +135,21 @@ public:
     UFUNCTION(BlueprintPure, Category="Afterfall|Traversal")
     bool IsHanging() const { return TraversalState == EAFTraversalState::Hanging; }
 
+    UFUNCTION(BlueprintPure, Category="Afterfall|Traversal")
+    bool IsTraversalActive() const { return TraversalState != EAFTraversalState::None; }
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation")
+    bool bIsInAir = false;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation")
+    float VerticalVelocity = 0.0f;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation")
+    float TraversalAlpha = 0.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation")
+    bool bHideWeaponDuringTraversal = true;
+
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
     bool bAutoLedgeGrab = true;
 
@@ -250,5 +265,6 @@ private:
         const FHitResult& TopHit);
     void ClimbFromLedge();
     void FinishTraversalMove();
+    void SetTraversalWeaponStowed(bool bStowed);
     FVector GetTraversalForward() const;
 };
