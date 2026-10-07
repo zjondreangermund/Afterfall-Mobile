@@ -10,6 +10,15 @@ class UAFHealthComponent;
 class UAFInventoryComponent;
 class AAFWeaponBase;
 
+UENUM(BlueprintType)
+enum class EAFTraversalState : uint8
+{
+    None UMETA(DisplayName="Normal"),
+    Vaulting UMETA(DisplayName="Vaulting"),
+    Mantling UMETA(DisplayName="Mantling"),
+    Hanging UMETA(DisplayName="Ledge Hang")
+};
+
 UCLASS()
 class AFTERFALLMOBILE_API AAFCharacter : public ACharacter
 {
@@ -18,7 +27,6 @@ class AFTERFALLMOBILE_API AAFCharacter : public ACharacter
 public:
     AAFCharacter();
     virtual void Tick(float DeltaSeconds) override;
-
     virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
     UFUNCTION(BlueprintCallable, Category="Afterfall|Combat")
@@ -50,8 +58,6 @@ public:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Camera")
     float AimFOV = 65.f;
 
-    // Camera framing is driven here so Blueprint key events do not need to
-    // duplicate shoulder/ADS camera logic.
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Camera|Shoulder", meta=(ClampMin="50"))
     float NormalCameraArmLength = 260.f;
 
@@ -79,7 +85,6 @@ public:
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Combat")
     bool bIsAiming = false;
 
-    // Read this in ABP_Afterfall_Rifle for the upper-body up/down aim.
     UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Combat")
     float AimPitch = 0.f;
 
@@ -110,6 +115,74 @@ public:
     UFUNCTION(BlueprintCallable, Category="Afterfall|Camera")
     void LookPitch(float Value);
 
+    // Contextual traversal. Space jumps normally, but vaults/mantles when a
+    // valid obstacle is directly ahead. Falling characters can auto-grab ledges.
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Traversal")
+    void TraversalJumpPressed();
+
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Traversal")
+    void TraversalJumpReleased();
+
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Traversal")
+    void DropFromLedge();
+
+    UFUNCTION(BlueprintCallable, Category="Afterfall|Traversal")
+    bool TryContextTraversal();
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Traversal")
+    EAFTraversalState GetTraversalState() const { return TraversalState; }
+
+    UFUNCTION(BlueprintPure, Category="Afterfall|Traversal")
+    bool IsHanging() const { return TraversalState == EAFTraversalState::Hanging; }
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
+    bool bAutoLedgeGrab = true;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="40.0"))
+    float TraversalProbeDistance = 135.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="10.0"))
+    float MinTraversalObstacleHeight = 32.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="40.0"))
+    float VaultMaxHeight = 105.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="80.0"))
+    float MantleMaxHeight = 215.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="0.05"))
+    float VaultDuration = 0.46f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="0.05"))
+    float MantleDuration = 0.58f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="10.0"))
+    float VaultLandingForwardDistance = 155.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="20.0"))
+    float LedgeGrabForwardDistance = 95.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
+    float LedgeTopMinRelativeHeight = 20.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
+    float LedgeTopMaxRelativeHeight = 145.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="10.0"))
+    float HangBodyDrop = 72.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="0.0"))
+    float HangShimmySpeed = 115.f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
+    bool bAutoSpawnTraversalTestCourseInEditor = true;
+
+    UPROPERTY(BlueprintAssignable, Category="Afterfall|Traversal")
+    FSimpleMulticastDelegate OnTraversalFinishedNative;
+
+    UFUNCTION(BlueprintImplementableEvent, Category="Afterfall|Traversal")
+    void OnTraversalStateChanged(EAFTraversalState NewState);
+
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Camera")
     TObjectPtr<USpringArmComponent> CameraBoom;
 
@@ -133,10 +206,52 @@ protected:
     bool bPreviousControllerYaw = false;
     bool bPreviousOrientRotationToMovement = true;
 
-    // Retained for serialized Blueprint compatibility; tune EquippedWeapon.Tuning instead.
     UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Set Damage on the weapon Tuning"))
     float PrimaryDamage = 25.0f;
 
     UPROPERTY(meta=(DeprecatedProperty, DeprecationMessage="Set EffectiveRange on the weapon Tuning"))
     float FireRange = 12000.0f;
+
+private:
+    EAFTraversalState TraversalState = EAFTraversalState::None;
+
+    FVector TraversalStartLocation = FVector::ZeroVector;
+    FVector TraversalTargetLocation = FVector::ZeroVector;
+    FRotator TraversalStartRotation = FRotator::ZeroRotator;
+    FRotator TraversalTargetRotation = FRotator::ZeroRotator;
+    float TraversalElapsed = 0.f;
+    float TraversalDurationActive = 0.5f;
+    float TraversalArcHeight = 0.f;
+
+    FVector HangingWallNormal = FVector::ZeroVector;
+    FVector HangingLedgeTop = FVector::ZeroVector;
+
+    float MoveForwardInput = 0.f;
+    float MoveRightInput = 0.f;
+    float LedgeGrabScanCooldown = 0.f;
+
+    void UpdateTraversal(float DeltaSeconds);
+    void UpdateHanging(float DeltaSeconds);
+    bool TryAutoGrabLedge();
+    bool FindObstacleTop(
+        float ForwardDistance,
+        FHitResult& OutWallHit,
+        FHitResult& OutTopHit,
+        float& OutObstacleHeight) const;
+    bool FindVaultLanding(
+        const FHitResult& WallHit,
+        FVector& OutLandingLocation) const;
+    bool CanOccupyCapsuleAt(const FVector& WorldLocation) const;
+    void StartTraversalMove(
+        EAFTraversalState NewState,
+        const FVector& TargetLocation,
+        const FRotator& TargetRotation,
+        float Duration,
+        float ArcHeight);
+    void EnterLedgeHang(
+        const FHitResult& WallHit,
+        const FHitResult& TopHit);
+    void ClimbFromLedge();
+    void FinishTraversalMove();
+    FVector GetTraversalForward() const;
 };
