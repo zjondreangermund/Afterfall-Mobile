@@ -151,7 +151,7 @@ void AAFCharacter::BeginPlay()
             const FVector CourseLocation =
                 GetActorLocation()
                 - FVector(0.0f, 0.0f, HalfHeight)
-                + GetActorForwardVector().GetSafeNormal2D() * 180.0f;
+                + GetActorForwardVector().GetSafeNormal2D() * 80.0f;
 
             const FRotator CourseRotation(
                 0.0f,
