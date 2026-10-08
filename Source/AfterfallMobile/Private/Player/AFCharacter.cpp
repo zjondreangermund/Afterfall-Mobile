@@ -1001,7 +1001,8 @@ bool AAFCharacter::StartTraversalMove(
 
     TraversalStartLocation = GetActorLocation();
     TraversalTargetLocation = TargetLocation;
-    TraversalClearanceZ = FMath::Max3(
+    // FVector coordinates are doubles; capsule dimensions are floats.
+    TraversalClearanceZ = FMath::Max3<double>(
         TraversalStartLocation.Z, TargetLocation.Z,
         ObstacleTopZ + GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 3.0f);
     if (!CanOccupyCapsuleAt(TargetLocation) || !IsTraversalPathClear())
