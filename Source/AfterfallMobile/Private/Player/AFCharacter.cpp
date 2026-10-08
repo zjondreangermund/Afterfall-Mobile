@@ -546,6 +546,14 @@ bool AAFCharacter::TryContextTraversal()
         }
     }
 
+    // A tall wall should not instantly play a mantle from the ground.
+    // Returning false lets TraversalJumpPressed perform a normal jump; the
+    // airborne ledge scanner then enters Hanging when the hands reach the lip.
+    if (ObstacleHeight > DirectMantleMaxHeight)
+    {
+        return false;
+    }
+
     const float CapsuleRadius = GetCapsuleComponent()->GetScaledCapsuleRadius();
     const float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
@@ -1057,12 +1065,12 @@ void AAFCharacter::EnterLedgeHang(
 
     bUseControllerRotationYaw = false;
 
-    // The 2.5 m climb-start sequence is the closest match to an actual
-    // jump-to-ledge grab. Use the catch animation as a fallback.
+    // Catch_Mantle_high actually ends in a ledge-contact pose, so it is a
+    // much better persistent hang source than the 2.5 m climb-start clip.
     TSoftObjectPtr<UAnimSequenceBase> HangVisual =
-        !HighClimbAnimation.IsNull()
-            ? HighClimbAnimation
-            : LedgeCatchAnimation;
+        !LedgeCatchAnimation.IsNull()
+            ? LedgeCatchAnimation
+            : HighClimbAnimation;
 
     if (!HangVisual.IsNull() &&
         PlayFullBodySequence(
@@ -1149,8 +1157,10 @@ void AAFCharacter::ClimbFromLedge()
         Target,
         TargetRotation,
         MantleDuration,
-        42.0f,
-        LedgeClimbAnimation);
+        18.0f,
+        !HighClimbAnimation.IsNull()
+            ? HighClimbAnimation
+            : LedgeClimbAnimation);
 }
 
 void AAFCharacter::FinishTraversalMove()
