@@ -1,3 +1,7 @@
+> Follow-up: [Motion Warping traversal](MOTION_WARPING_TRAVERSAL.md) now owns
+> animation-driven movement. The collision/landing/ledge safety work below is
+> retained; its three-phase path is used only for clearance preflight.
+
 # Recording 7 traversal corrections
 
 This patch builds on main without changing the obstacle course or imported assets.

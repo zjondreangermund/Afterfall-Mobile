@@ -1,6 +1,7 @@
 #pragma once
 
-// Engine-independent path timing, shared by runtime movement and regression tests.
+// Engine-independent clearance envelope, shared by preflight queries and regression tests.
+// Actual traversal movement belongs to CharacterMovement + montage root motion.
 namespace AFTraversalPath
 {
 inline float Smooth(float Value)

@@ -14,7 +14,13 @@ public class AfterfallMobile : ModuleRules
             "InputCore",
             "AIModule",
             "NavigationSystem",
-            "UMG"
+            "UMG",
+            "MotionWarping"
         });
+
+        if (Target.bBuildEditor)
+        {
+            PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "AssetRegistry" });
+        }
     }
 }

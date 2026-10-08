@@ -1,5 +1,10 @@
 #include "Player/AFCharacter.h"
 #include "Player/AFTraversalPath.h"
+#include "Player/AFTraversalMontageFactory.h"
+#include "Animation/AnimMontage.h"
+#include "MotionWarpingComponent.h"
+#include "DrawDebugHelpers.h"
+#include "HAL/IConsoleManager.h"
 #include "Animation/AnimSequence.h"
 
 #include "Animation/AnimInstance.h"
@@ -20,10 +25,14 @@
 #include "World/AFTraversalTestCourse.h"
 #include "TimerManager.h"
 
+static TAutoConsoleVariable<int32> CVarAFTraversalDebug(
+    TEXT("af.Traversal.Debug"), 0, TEXT("Draw wall (red), top (green), landing (blue), warp feet target (cyan)."));
+
 AAFCharacter::AAFCharacter()
 {
     PrimaryActorTick.bCanEverTick = true;
     DefaultWeaponClass = AAFHoundWeapon::StaticClass();
+    MotionWarping = CreateDefaultSubobject<UMotionWarpingComponent>(TEXT("MotionWarping"));
 
     JumpStartAnimation = TSoftObjectPtr<UAnimSequenceBase>(
         FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Start.MM_Rifle_Jump_Start")));
@@ -104,7 +113,7 @@ void AAFCharacter::MoveForward(float Value)
 
     if (TraversalState != EAFTraversalState::None)
     {
-        if (TraversalState == EAFTraversalState::Hanging && Value < -0.55f)
+        if ((TraversalState == EAFTraversalState::Hanging || TraversalState == EAFTraversalState::Catching) && Value < -0.55f)
         {
             DropFromLedge();
         }
@@ -171,6 +180,8 @@ void AAFCharacter::FirePrimary()
 void AAFCharacter::BeginPlay()
 {
     Super::BeginPlay();
+    GetCapsuleComponent()->OnComponentHit.AddDynamic(this, &AAFCharacter::HandleTraversalBlockingHit);
+    CacheTraversalMontages();
 
     DefaultFOV = FollowCamera->FieldOfView;
 
@@ -240,6 +251,8 @@ void AAFCharacter::BeginPlay()
 
 void AAFCharacter::EndPlay(const EEndPlayReason::Type Reason)
 {
+    if (IsTraversalActive()) EndTraversalMove(false);
+    GetCapsuleComponent()->OnComponentHit.RemoveDynamic(this, &AAFCharacter::HandleTraversalBlockingHit);
     if (IsValid(EquippedWeapon))
     {
         EquippedWeapon->StopFire();
@@ -300,7 +313,8 @@ void AAFCharacter::Tick(float Dt)
     UpdateJumpVisual(Dt);
 
     if (TraversalState == EAFTraversalState::Vaulting ||
-        TraversalState == EAFTraversalState::Mantling)
+        TraversalState == EAFTraversalState::Mantling ||
+        TraversalState == EAFTraversalState::Catching)
     {
         UpdateTraversal(Dt);
     }
@@ -319,6 +333,7 @@ void AAFCharacter::Tick(float Dt)
             LedgeGrabScanCooldown = FMath::Max(LedgeGrabScanCooldown, 0.05f);
         }
     }
+    DrawTraversalDebug();
 }
 
 
@@ -451,9 +466,8 @@ void AAFCharacter::TraversalJumpReleased()
 
 void AAFCharacter::DropFromLedge()
 {
-    GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
 
-    if (TraversalState != EAFTraversalState::Hanging || !GetCharacterMovement())
+    if ((TraversalState != EAFTraversalState::Hanging && TraversalState != EAFTraversalState::Catching) || !GetCharacterMovement())
     {
         return;
     }
@@ -497,6 +511,8 @@ bool AAFCharacter::TryContextTraversal()
         return false;
     }
 
+    RecordTraversalDetection(WallHit, TopHit, ObstacleHeight);
+
     if (ObstacleHeight < MinTraversalObstacleHeight ||
         ObstacleHeight > MantleMaxHeight)
     {
@@ -521,27 +537,26 @@ bool AAFCharacter::TryContextTraversal()
                 ObstacleHeight <= HurdleMaxHeight &&
                 HorizontalSpeed >= HurdleSpeedThreshold;
 
-            TSoftObjectPtr<UAnimSequenceBase> VaultVisual;
+            EAFTraversalAction VaultAction;
 
             if (bUseHurdle)
             {
-                VaultVisual = HurdleRunAnimation;
+                VaultAction = EAFTraversalAction::Hurdle;
             }
             else if (HorizontalSpeed >= 185.0f)
             {
-                VaultVisual = VaultRunAnimation;
+                VaultAction = EAFTraversalAction::VaultRun;
             }
             else
             {
-                VaultVisual = VaultWalkAnimation;
+                VaultAction = EAFTraversalAction::VaultWalk;
             }
 
             if (StartTraversalMove(
                 EAFTraversalState::Vaulting,
                 LandingLocation,
                 TargetRotation,
-                VaultDuration,
-                VaultVisual,
+                VaultAction,
                 TopHit.ImpactPoint.Z))
             {
                 return true;
@@ -573,73 +588,71 @@ bool AAFCharacter::TryContextTraversal()
     }
 
     // These Mantle_1_0 assets are approach variants (stand/walk/run), not
-    // different wall heights. Select by approach speed; the actor path handles
-    // the actual detected wall height.
-    TSoftObjectPtr<UAnimSequenceBase> MantleVisual;
+    // different wall heights. Motion Warping adapts root motion to the measured target.
+    EAFTraversalAction MantleAction;
     if (HorizontalSpeed >= 230.0f)
     {
-        MantleVisual = MantleMediumAnimation; // run variant
+        MantleAction = EAFTraversalAction::MantleRun; // run variant
     }
     else if (HorizontalSpeed >= 70.0f)
     {
-        MantleVisual = MantleLowAnimation; // walk variant
+        MantleAction = EAFTraversalAction::MantleWalk; // walk variant
     }
     else
     {
-        MantleVisual = LedgeClimbAnimation; // stand variant
+        MantleAction = EAFTraversalAction::MantleStand; // stand variant
     }
 
     return StartTraversalMove(
         EAFTraversalState::Mantling,
         MantleTarget,
         TargetRotation,
-        MantleDuration,
-        MantleVisual,
+        MantleAction,
         TopHit.ImpactPoint.Z);
 }
 
 void AAFCharacter::UpdateTraversal(float DeltaSeconds)
 {
-    if (TraversalState != EAFTraversalState::Vaulting &&
-        TraversalState != EAFTraversalState::Mantling)
+    // CharacterMovement performs every movement sweep. Never set actor position here.
+    TraversalElapsed += FMath::Max(0.f, DeltaSeconds);
+    if (!ActiveTraversalMontage || !TraversalAnimInstance ||
+        GetMesh()->GetAnimInstance() != TraversalAnimInstance || bTraversalBlocked ||
+        HealthComponent->IsDead() || !RefreshTraversalTarget() ||
+        GetCharacterMovement()->MovementMode != MOVE_Flying)
     {
+        TraversalDiagnostic = TEXT("Traversal interrupted: collision, missing support, animation or movement changed.");
+        EndTraversalMove(false);
         return;
     }
-
-    const float PreviousAlpha = TraversalAlpha;
-    TraversalElapsed += FMath::Max(0.f, DeltaSeconds);
-
-    const float Alpha = FMath::Clamp(
-        TraversalElapsed / FMath::Max(0.01f, TraversalDurationActive),
-        0.f,
-        1.f);
-    TraversalAlpha = Alpha;
-
-    // Sweep every frame as well as checking the route before starting. Moving
-    // props/ceilings can invalidate a previously clear traversal. Visit phase
-    // boundaries on a slow frame instead of cutting diagonally through a wall.
-    const float Steps[] = {0.35f, 0.75f, Alpha};
-    for (float Step : Steps)
+    const float Length = ActiveTraversalMontage->GetPlayLength();
+    const float Position = TraversalAnimInstance->Montage_GetPosition(ActiveTraversalMontage);
+    TraversalAlpha = FMath::Clamp(Position / FMath::Max(Length, 0.01f), 0.f, 1.f);
+    if (Position >= Length - 0.001f)
     {
-        if (Step <= PreviousAlpha || Step > Alpha)
+        // No final teleport. A blocked/sliding capsule must not count as a successful climb.
+        FHitResult Support;
+        const bool bAtTarget = FVector::Dist(GetActorLocation(), TraversalTargetLocation) <= TraversalArrivalTolerance;
+        if (TraversalState == EAFTraversalState::Catching && bAtTarget)
         {
-            continue;
+            TraversalAnimInstance->Montage_Pause(ActiveTraversalMontage);
+            GetCharacterMovement()->StopMovementImmediately();
+            MotionWarping->DisableAllRootMotionModifiers();
+            TraversalState = EAFTraversalState::Hanging;
+            TraversalDiagnostic = TEXT("Hanging");
+            OnTraversalStateChanged(TraversalState);
         }
-        const FQuat NewRotation = FQuat::Slerp(
-            TraversalStartRotation.Quaternion(), TraversalTargetRotation.Quaternion(),
-            FMath::SmoothStep(0.0f, 1.0f, Step));
-        FHitResult MoveHit;
-        SetActorLocationAndRotation(EvaluateTraversalLocation(Step), NewRotation, true, &MoveHit);
-        if (MoveHit.bBlockingHit || MoveHit.bStartPenetrating)
+        else
         {
-            EndTraversalMove(false);
-            return;
+            const bool bCompleted = bAtTarget && HasTraversalSupport(GetActorLocation(), Support);
+            TraversalDiagnostic = bCompleted ? TEXT("Traversal completed") : TEXT("Traversal missed target/support; falling safely");
+            EndTraversalMove(bCompleted);
         }
     }
-
-    if (Alpha >= 1.0f - KINDA_SMALL_NUMBER)
+    else if (!TraversalAnimInstance->Montage_IsActive(ActiveTraversalMontage) ||
+             TraversalElapsed > TraversalDurationActive + 1.f)
     {
-        EndTraversalMove(true);
+        TraversalDiagnostic = TEXT("Traversal montage stopped or timed out");
+        EndTraversalMove(false);
     }
 }
 
@@ -657,14 +670,20 @@ void AAFCharacter::UpdateHanging(float DeltaSeconds)
         GetCharacterMovement()->Velocity = FVector::ZeroVector;
     }
 
-    if (FMath::Abs(MoveRightInput) < 0.1f)
+    if (!HangingLedgeComponent.IsValid() || HealthComponent->IsDead() || !IsHangAnchorValid() ||
+        !TraversalAnimInstance || GetMesh()->GetAnimInstance() != TraversalAnimInstance ||
+        !TraversalAnimInstance->Montage_IsActive(ActiveTraversalMontage) ||
+        GetCharacterMovement()->MovementMode != MOVE_Flying)
     {
+        DropFromLedge();
         return;
     }
-
+    const FVector PreviousTop = HangingLedgeTop;
+    HangingLedgeTop = HangingLedgeComponent->GetComponentTransform().TransformPosition(HangingLocalTop);
+    HangingWallNormal = HangingLedgeComponent->GetComponentTransform().TransformVectorNoScale(HangingLocalNormal).GetSafeNormal();
     const FVector Right = GetActorRightVector().GetSafeNormal2D();
     const FVector Candidate =
-        GetActorLocation()
+        GetActorLocation() + (HangingLedgeTop - PreviousTop)
         + Right * MoveRightInput * HangShimmySpeed * FMath::Max(0.f, DeltaSeconds);
 
     const float CapsuleRadius = GetCapsuleComponent()->GetScaledCapsuleRadius();
@@ -689,6 +708,7 @@ void AAFCharacter::UpdateHanging(float DeltaSeconds)
             ECC_Visibility,
             Params))
     {
+        if (FMath::Abs(MoveRightInput) < 0.1f) DropFromLedge();
         return;
     }
 
@@ -716,15 +736,34 @@ void AAFCharacter::UpdateHanging(float DeltaSeconds)
         !GetCharacterMovement()->IsWalkable(TopHit) ||
         FVector::DotProduct(HorizontalNormal, HangingWallNormal) < 0.9f)
     {
+        if (FMath::Abs(MoveRightInput) < 0.1f) DropFromLedge();
         return;
     }
     Adjusted.Z = TopHit.ImpactPoint.Z - FMath::Max(10.0f, HangBodyDrop);
     if (CanOccupyCapsuleAt(Adjusted) && CanMoveCapsuleBetween(GetActorLocation(), Adjusted))
     {
+        FHitResult MoveHit;
+        // A paused hang has no root motion. Swept shimmy/ledge-follow is intentionally separate.
+        SetActorLocationAndRotation(Adjusted, (-HorizontalNormal).Rotation(), true, &MoveHit);
+        if (MoveHit.bBlockingHit || MoveHit.bStartPenetrating)
+        {
+            DropFromLedge();
+            return;
+        }
         HangingWallNormal = WallHit.ImpactNormal.GetSafeNormal();
         HangingLedgeTop = TopHit.ImpactPoint;
-        FHitResult MoveHit;
-        SetActorLocationAndRotation(Adjusted, (-HorizontalNormal).Rotation(), true, &MoveHit);
+        HangingLedgeComponent = TopHit.GetComponent();
+        if (!HangingLedgeComponent.IsValid()) { DropFromLedge(); return; }
+        HangingLocalTop = HangingLedgeComponent->GetComponentTransform().InverseTransformPosition(HangingLedgeTop);
+        HangingLocalNormal = HangingLedgeComponent->GetComponentTransform().InverseTransformVectorNoScale(HangingWallNormal);
+        TraversalTarget = Adjusted - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+        MotionWarping->AddOrUpdateWarpTargetFromLocationAndRotation(AFTraversalMontageFactory::TargetName,
+            TraversalTarget, (-HorizontalNormal).Rotation());
+        UpdateHandContacts();
+    }
+    else if (!HangingLedgeTop.Equals(PreviousTop, 0.1f) || FMath::Abs(MoveRightInput) < 0.1f)
+    {
+        DropFromLedge();
     }
 }
 
@@ -817,8 +856,10 @@ bool AAFCharacter::TryAutoGrabLedge()
         return false;
     }
 
+    RecordTraversalDetection(WallHit, TopHit,
+        TopHit.ImpactPoint.Z - (GetActorLocation().Z - GetCapsuleComponent()->GetScaledCapsuleHalfHeight()));
     EnterLedgeHang(WallHit, TopHit);
-    return TraversalState == EAFTraversalState::Hanging;
+    return TraversalState == EAFTraversalState::Catching;
 }
 
 bool AAFCharacter::FindObstacleTop(
@@ -843,50 +884,38 @@ bool AAFCharacter::FindObstacleTop(
     Params.AddIgnoredActor(this);
     Params.AddIgnoredActor(EquippedWeapon);
 
-    FVector WallStart = GetActorLocation();
-    WallStart.Z = FootZ + 55.0f;
-
-    const FVector WallEnd =
-        WallStart + Forward * FMath::Max(40.0f, ForwardDistance);
-
-    if (!GetWorld()->LineTraceSingleByChannel(
-            OutWallHit,
-            WallStart,
-            WallEnd,
-            ECC_Visibility,
-            Params))
+    // Keep the existing waist probe, with a lower fallback for short hurdles.
+    bool bWallFound = false;
+    const float ProbeHeights[] = {55.f, FMath::Max(10.f, MinTraversalObstacleHeight - 2.f)};
+    for (float ProbeHeight : ProbeHeights)
     {
-        return false;
+        FVector WallStart = GetActorLocation();
+        WallStart.Z = FootZ + ProbeHeight;
+        if (GetWorld()->LineTraceSingleByChannel(OutWallHit, WallStart,
+            WallStart + Forward * FMath::Max(40.f, ForwardDistance), ECC_Visibility, Params) &&
+            FMath::Abs(OutWallHit.ImpactNormal.Z) <= 0.50f)
+        {
+            bWallFound = true;
+            break;
+        }
     }
-
-    if (FMath::Abs(OutWallHit.ImpactNormal.Z) > 0.50f)
+    if (!bWallFound) return false;
+    const FVector TopProbeXY = OutWallHit.ImpactPoint - OutWallHit.ImpactNormal.GetSafeNormal2D() * 10.f;
+    // Find the first exposed top above the wall hit. A single trace from far above
+    // a window could select its lintel/roof instead of the reachable sill.
+    bool bTopFound = false;
+    for (float Z = OutWallHit.ImpactPoint.Z + 20.f; Z <= FootZ + MantleMaxHeight + 20.f; Z += 20.f)
     {
-        return false;
+        const FVector TopStart(TopProbeXY.X, TopProbeXY.Y, Z);
+        if (GetWorld()->LineTraceSingleByChannel(OutTopHit, TopStart,
+            TopStart - FVector(0.f, 0.f, 22.f), ECC_Visibility, Params) &&
+            !OutTopHit.bStartPenetrating && GetCharacterMovement()->IsWalkable(OutTopHit))
+        {
+            bTopFound = true;
+            break;
+        }
     }
-
-    const FVector TopProbeXY =
-        OutWallHit.ImpactPoint - OutWallHit.ImpactNormal * 10.0f;
-
-    FVector TopStart = TopProbeXY;
-    TopStart.Z = FootZ + MantleMaxHeight + 120.0f;
-
-    FVector TopEnd = TopProbeXY;
-    TopEnd.Z = FootZ - 25.0f;
-
-    if (!GetWorld()->LineTraceSingleByChannel(
-            OutTopHit,
-            TopStart,
-            TopEnd,
-            ECC_Visibility,
-            Params))
-    {
-        return false;
-    }
-
-    if (OutTopHit.ImpactNormal.Z < 0.58f)
-    {
-        return false;
-    }
+    if (!bTopFound) return false;
 
     OutObstacleHeight = OutTopHit.ImpactPoint.Z - FootZ;
     return OutObstacleHeight >= 0.0f;
@@ -990,144 +1019,75 @@ bool AAFCharacter::StartTraversalMove(
     EAFTraversalState NewState,
     const FVector& TargetLocation,
     const FRotator& TargetRotation,
-    float Duration,
-    TSoftObjectPtr<UAnimSequenceBase> VisualAnimation,
+    EAFTraversalAction Action,
     float ObstacleTopZ)
 {
-    if (!GetCharacterMovement() || !GetCapsuleComponent() || !GetWorld())
-    {
-        return false;
-    }
-
+    if (!GetCharacterMovement() || !GetCapsuleComponent() || !GetWorld() || HealthComponent->IsDead()) return false;
+    SelectedTraversalAction = Action;
     TraversalStartLocation = GetActorLocation();
     TraversalTargetLocation = TargetLocation;
-    // FVector coordinates are doubles; capsule dimensions are floats.
+    // Keep the 802392b double/float fix and the 031c8b8 conservative route preflight.
     TraversalClearanceZ = FMath::Max3<double>(
         TraversalStartLocation.Z, TargetLocation.Z,
         ObstacleTopZ + GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 3.0f);
-    if (!CanOccupyCapsuleAt(TargetLocation) || !IsTraversalPathClear())
+    FHitResult Support;
+    if (!CanOccupyCapsuleAt(TargetLocation) || !IsTraversalPathClear() ||
+        !HasTraversalSupport(TargetLocation, Support))
     {
+        TraversalDiagnostic = TEXT("Rejected: capsule route or landing support is blocked");
+        return false;
+    }
+    if (!CachedTraversalMontages.Contains(Action))
+    {
+        TraversalDiagnostic = TEXT("Missing/invalid traversal montage; check Output Log");
         return false;
     }
     SaveTraversalMovementSettings();
-
     StopAiming();
     StopPrimaryFire();
-    RestoreLocomotionAnimationBlueprint();
-    SetTraversalWeaponStowed(true);
-
-    TraversalState = NewState;
-    TraversalStartLocation = GetActorLocation();
-    TraversalTargetLocation = TargetLocation;
-    TraversalStartRotation = GetActorRotation();
+    if (bJumpVisualActive) RestoreLocomotionAnimationBlueprint();
     TraversalTargetRotation = TargetRotation;
-    TraversalElapsed = 0.0f;
-    TraversalAlpha = 0.0f;
-    TraversalDurationActive =
-        ResolveTraversalDuration(VisualAnimation, FMath::Max(0.05f, Duration));
-
-    if (!VisualAnimation.IsNull())
+    TraversalSupportComponent = Support.GetComponent();
+    TraversalSupportLocalTarget = TraversalSupportComponent->GetComponentTransform().InverseTransformPosition(TargetLocation);
+    TraversalSupportLocalRotation = TraversalSupportComponent->GetComponentQuat().Inverse() * TargetRotation.Quaternion();
+    TraversalState = NewState;
+    DebugLandingLocation = Support.ImpactPoint;
+    if (!PlayTraversalMontage(Action))
     {
-        PlayFullBodySequence(VisualAnimation, false, TraversalVisualPlayRate);
+        EndTraversalMove(false);
+        return false;
     }
-
-    GetCharacterMovement()->StopMovementImmediately();
-    GetCharacterMovement()->SetMovementMode(MOVE_Flying);
-    GetCharacterMovement()->GravityScale = 0.0f;
-    GetCharacterMovement()->bOrientRotationToMovement = false;
-    bUseControllerRotationYaw = false;
-
     OnTraversalStateChanged(TraversalState);
     return true;
 }
 
-void AAFCharacter::EnterLedgeHang(
-    const FHitResult& WallHit,
-    const FHitResult& TopHit)
+void AAFCharacter::EnterLedgeHang(const FHitResult& WallHit, const FHitResult& TopHit)
 {
-    if (!GetCapsuleComponent() || !GetCharacterMovement())
-    {
-        return;
-    }
-
-    const float CapsuleRadius =
-        GetCapsuleComponent()->GetScaledCapsuleRadius();
-
-    FVector HangLocation =
-        WallHit.ImpactPoint
-        + WallHit.ImpactNormal.GetSafeNormal2D() * (CapsuleRadius + 3.0f);
-
-    HangLocation.Z =
-        TopHit.ImpactPoint.Z - FMath::Max(10.0f, HangBodyDrop);
-
-    if (!CanOccupyCapsuleAt(HangLocation) ||
-        !CanMoveCapsuleBetween(GetActorLocation(), HangLocation))
-    {
-        return;
-    }
-
+    if (!CachedTraversalMontages.Contains(EAFTraversalAction::Catch)) return;
+    const float Radius = GetCapsuleComponent()->GetScaledCapsuleRadius();
+    FVector HangLocation = WallHit.ImpactPoint + WallHit.ImpactNormal.GetSafeNormal2D() * (Radius + 3.f);
+    HangLocation.Z = TopHit.ImpactPoint.Z - FMath::Max(10.f, HangBodyDrop);
+    if (!CanOccupyCapsuleAt(HangLocation) || !CanMoveCapsuleBetween(GetActorLocation(), HangLocation)) return;
     SaveTraversalMovementSettings();
     StopAiming();
     StopPrimaryFire();
     RestoreLocomotionAnimationBlueprint();
-    SetTraversalWeaponStowed(true);
-
-    HangingWallNormal = WallHit.ImpactNormal.GetSafeNormal();
+    HangingWallNormal = WallHit.ImpactNormal.GetSafeNormal2D();
     HangingLedgeTop = TopHit.ImpactPoint;
-
-    TraversalState = EAFTraversalState::Hanging;
-
-    GetCharacterMovement()->StopMovementImmediately();
-    GetCharacterMovement()->SetMovementMode(MOVE_Flying);
-    GetCharacterMovement()->GravityScale = 0.0f;
-    GetCharacterMovement()->bOrientRotationToMovement = false;
-
-    FVector FaceDirection = -HangingWallNormal;
-    FaceDirection.Z = 0.0f;
-
-    FRotator HangRotation = FaceDirection.Rotation();
-    HangRotation.Pitch = 0.f;
-    HangRotation.Roll = 0.f;
-
-    FHitResult HangMoveHit;
-    SetActorLocationAndRotation(HangLocation, HangRotation, true, &HangMoveHit);
-    if (HangMoveHit.bBlockingHit || HangMoveHit.bStartPenetrating)
-    {
-        EndTraversalMove(false);
-        return;
-    }
-
-    bUseControllerRotationYaw = false;
-
-    // Catch_Mantle_high actually ends in a ledge-contact pose, so it is a
-    // much better persistent hang source than the 2.5 m climb-start clip.
-    TSoftObjectPtr<UAnimSequenceBase> HangVisual =
-        !LedgeCatchAnimation.IsNull()
-            ? LedgeCatchAnimation
-            : HighClimbAnimation;
-
-    if (!HangVisual.IsNull() &&
-        PlayFullBodySequence(
-            HangVisual,
-            false,
-            TraversalVisualPlayRate))
-    {
-        if (UAnimSequenceBase* HangSequence = HangVisual.LoadSynchronous())
-        {
-            const float PauseDelay =
-                (HangSequence->GetPlayLength() /
-                    FMath::Max(0.1f, TraversalVisualPlayRate)) *
-                FMath::Clamp(HangPoseFreezeFraction, 0.1f, 0.98f);
-
-            GetWorldTimerManager().SetTimer(
-                TraversalPoseTimer,
-                this,
-                &AAFCharacter::PauseTraversalVisualForHang,
-                FMath::Max(0.05f, PauseDelay),
-                false);
-        }
-    }
-
+    HangingLedgeComponent = TopHit.GetComponent();
+    if (!HangingLedgeComponent.IsValid()) return;
+    HangingLocalTop = HangingLedgeComponent->GetComponentTransform().InverseTransformPosition(HangingLedgeTop);
+    HangingLocalNormal = HangingLedgeComponent->GetComponentTransform().InverseTransformVectorNoScale(HangingWallNormal);
+    TraversalStartLocation = GetActorLocation();
+    TraversalTargetLocation = HangLocation;
+    TraversalTargetRotation = (-HangingWallNormal).Rotation();
+    TraversalSupportComponent = HangingLedgeComponent;
+    TraversalSupportLocalTarget = HangingLedgeComponent->GetComponentTransform().InverseTransformPosition(HangLocation);
+    TraversalSupportLocalRotation = HangingLedgeComponent->GetComponentQuat().Inverse() * TraversalTargetRotation.Quaternion();
+    TraversalState = EAFTraversalState::Catching;
+    // Catch moves through its montage; no instantaneous snap to the hanging location.
+    if (!PlayTraversalMontage(EAFTraversalAction::Catch)) { EndTraversalMove(false); return; }
+    UpdateHandContacts();
     OnTraversalStateChanged(TraversalState);
 }
 
@@ -1195,8 +1155,7 @@ void AAFCharacter::ClimbFromLedge()
         EAFTraversalState::Mantling,
         Target,
         TargetRotation,
-        MantleDuration,
-        LedgeClimbAnimation,
+        EAFTraversalAction::Climb,
         HangingLedgeTop.Z);
 }
 
@@ -1211,8 +1170,8 @@ FVector AAFCharacter::EvaluateTraversalLocation(float Alpha) const
 
 bool AAFCharacter::IsTraversalPathClear() const
 {
-    // Each phase is a straight segment, so these three sweeps cover the whole
-    // path even if a frame hitch later skips one of the phase boundaries.
+    // Retained conservative clearance envelope, NOT a movement driver.
+    // CharacterMovement separately sweeps the actual warped root-motion trajectory.
     const float PhaseEnds[] = {0.35f, 0.75f, 1.0f};
     FVector Previous = TraversalStartLocation;
     for (float Alpha : PhaseEnds)
@@ -1252,27 +1211,38 @@ void AAFCharacter::SaveTraversalMovementSettings()
 
 void AAFCharacter::EndTraversalMove(bool bCompleted)
 {
-    GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
-    // Never teleport to a target after a blocked sweep.
+    if (bFinishingTraversal) return;
+    TGuardValue<bool> Guard(bFinishingTraversal, true);
+    // Disable before stopping a montage; interruption callbacks can be synchronous.
+    MotionWarping->DisableAllRootMotionModifiers();
+    MotionWarping->RemoveWarpTarget(AFTraversalMontageFactory::TargetName);
+    if (TraversalAnimInstance)
+    {
+        if (ActiveTraversalMontage) TraversalAnimInstance->Montage_Stop(bCompleted ? 0.12f : 0.f, ActiveTraversalMontage);
+        TraversalAnimInstance->SetRootMotionMode(static_cast<ERootMotionMode::Type>(SavedTraversalRootMotionMode));
+    }
+    ActiveTraversalMontage = nullptr;
+    TraversalAnimInstance = nullptr;
     TraversalState = EAFTraversalState::None;
-    TraversalAlpha = 0.0f;
+    TraversalAlpha = 0.f;
+    bTraversalBlocked = false;
+    TraversalSupportComponent.Reset();
+    HangingLedgeComponent.Reset();
     if (GetCharacterMovement())
     {
         GetCharacterMovement()->GravityScale = TraversalSavedGravity;
         GetCharacterMovement()->bOrientRotationToMovement = TraversalSavedOrientToMovement;
         GetCharacterMovement()->StopMovementImmediately();
-        // Let movement find the actual floor, including after an interrupted climb.
+        // Never teleport; let CharacterMovement find the actual floor after completion/abort.
         GetCharacterMovement()->SetMovementMode(MOVE_Falling);
     }
     bUseControllerRotationYaw = TraversalSavedControllerYaw;
     HangingWallNormal = FVector::ZeroVector;
     HangingLedgeTop = FVector::ZeroVector;
-    RestoreLocomotionAnimationBlueprint();
     SetTraversalWeaponStowed(false);
     LedgeGrabScanCooldown = bCompleted ? 0.2f : 0.5f;
     OnTraversalStateChanged(TraversalState);
 }
-
 
 void AAFCharacter::SetJumpVisualPhase(EAFJumpVisualPhase NewPhase)
 {
@@ -1412,22 +1382,6 @@ void AAFCharacter::UpdateJumpVisual(float DeltaSeconds)
     }
 }
 
-float AAFCharacter::ResolveTraversalDuration(
-    TSoftObjectPtr<UAnimSequenceBase> Sequence,
-    float FallbackDuration) const
-{
-    UAnimSequenceBase* LoadedSequence = Sequence.LoadSynchronous();
-    if (!LoadedSequence)
-    {
-        return FMath::Max(0.05f, FallbackDuration);
-    }
-
-    return FMath::Max(
-        0.05f,
-        LoadedSequence->GetPlayLength() /
-            FMath::Max(0.1f, TraversalVisualPlayRate));
-}
-
 bool AAFCharacter::PlayFullBodySequence(
     TSoftObjectPtr<UAnimSequenceBase> Sequence,
     bool bLoop,
@@ -1447,7 +1401,6 @@ bool AAFCharacter::PlayFullBodySequence(
     if (GetWorld())
     {
         GetWorldTimerManager().ClearTimer(JumpVisualTimer);
-        GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
     }
 
     if (!SavedLocomotionAnimClass)
@@ -1492,10 +1445,9 @@ void AAFCharacter::RestoreLocomotionAnimationBlueprint()
     if (GetWorld())
     {
         GetWorldTimerManager().ClearTimer(JumpVisualTimer);
-        GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
     }
 
-    if (GetMesh())
+    if (GetMesh() && GetMesh()->GetAnimationMode() != EAnimationMode::AnimationBlueprint)
     {
         if (SavedLocomotionAnimClass)
         {
@@ -1513,36 +1465,38 @@ void AAFCharacter::RestoreLocomotionAnimationBlueprint()
     JumpVisualPhaseElapsed = 0.0f;
 }
 
-void AAFCharacter::PauseTraversalVisualForHang()
-{
-    if (TraversalState != EAFTraversalState::Hanging || !GetMesh())
-    {
-        return;
-    }
-
-    if (UAnimSingleNodeInstance* SingleNode =
-        GetMesh()->GetSingleNodeInstance())
-    {
-        // Hold the authored grab pose instead of falling back to locomotion
-        // while the character is attached to the ledge.
-        if (UAnimSequenceBase* Sequence = Cast<UAnimSequenceBase>(SingleNode->GetCurrentAsset()))
-        {
-            SingleNode->SetPosition(Sequence->GetPlayLength() *
-                FMath::Clamp(HangPoseFreezeFraction, 0.1f, 0.98f), false);
-        }
-        SingleNode->SetPlaying(false);
-    }
-}
-
 void AAFCharacter::SetTraversalWeaponStowed(bool bStowed)
 {
-    if (!bHideWeaponDuringTraversal || !IsValid(EquippedWeapon))
+    if (!IsValid(EquippedWeapon) || bStowed == bWeaponStowed) return;
+    if (bStowed)
     {
-        return;
+        WeaponPreviousParent = EquippedWeapon->GetRootComponent()->GetAttachParent();
+        WeaponPreviousSocket = EquippedWeapon->GetRootComponent()->GetAttachSocketName();
+        WeaponPreviousTransform = EquippedWeapon->GetRootComponent()->GetRelativeTransform();
+        bWeaponPreviousHidden = EquippedWeapon->IsHidden();
+        bWeaponPreviousCollision = EquippedWeapon->GetActorEnableCollision();
+        const FName Sling = GetMesh()->DoesSocketExist(WeaponSlingSocket) ? WeaponSlingSocket : WeaponSlingFallbackBone;
+        if (GetMesh()->DoesSocketExist(Sling))
+        {
+            EquippedWeapon->AttachToComponent(GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, Sling);
+            EquippedWeapon->SetActorRelativeTransform(WeaponSlingOffset);
+        }
+        // Prefer a visible sling even on older BPs with the legacy hide flag enabled.
+        else if (bHideWeaponDuringTraversal) EquippedWeapon->SetActorHiddenInGame(true);
+        EquippedWeapon->SetActorEnableCollision(false);
     }
-
-    EquippedWeapon->SetActorHiddenInGame(bStowed);
-    EquippedWeapon->SetActorEnableCollision(!bStowed);
+    else
+    {
+        if (WeaponPreviousParent.IsValid())
+        {
+            EquippedWeapon->AttachToComponent(WeaponPreviousParent.Get(), FAttachmentTransformRules::KeepRelativeTransform,
+                WeaponPreviousSocket);
+            EquippedWeapon->SetActorRelativeTransform(WeaponPreviousTransform);
+        }
+        EquippedWeapon->SetActorHiddenInGame(bWeaponPreviousHidden);
+        EquippedWeapon->SetActorEnableCollision(bWeaponPreviousCollision);
+    }
+    bWeaponStowed = bStowed;
 }
 
 FVector AAFCharacter::GetTraversalForward() const
@@ -1617,6 +1571,7 @@ void AAFCharacter::DropWeapon()
         return;
     }
 
+    SetTraversalWeaponStowed(false);
     AAFWeaponBase* Dropped = EquippedWeapon;
     EquippedWeapon = nullptr;
 
@@ -1628,5 +1583,258 @@ void AAFCharacter::DropWeapon()
 
 void AAFCharacter::HandleWeaponOwnerDeath()
 {
+    if (IsTraversalActive()) EndTraversalMove(false);
     DropWeapon();
+}
+
+TSoftObjectPtr<UAnimSequenceBase> AAFCharacter::GetTraversalSource(EAFTraversalAction Action) const
+{
+    switch (Action)
+    {
+    case EAFTraversalAction::Hurdle: return HurdleRunAnimation;
+    case EAFTraversalAction::VaultRun: return VaultRunAnimation;
+    case EAFTraversalAction::VaultWalk: return VaultWalkAnimation;
+    case EAFTraversalAction::MantleWalk: return MantleLowAnimation;
+    case EAFTraversalAction::MantleRun: return MantleMediumAnimation;
+    case EAFTraversalAction::MantleStand: return LedgeClimbAnimation;
+    case EAFTraversalAction::Catch: return LedgeCatchAnimation;
+    case EAFTraversalAction::Climb: return LedgeClimbAnimation; // Authored full climb-up override is recommended.
+    default: return nullptr;
+    }
+}
+
+void AAFCharacter::CacheTraversalMontages()
+{
+    // Load once before input, never synchronously load/duplicate at the wall.
+    CachedTraversalMontages.Reset();
+    for (uint8 Index = uint8(EAFTraversalAction::Hurdle); Index <= uint8(EAFTraversalAction::Climb); ++Index)
+    {
+        const EAFTraversalAction Action = static_cast<EAFTraversalAction>(Index);
+        UAnimMontage* Montage = nullptr;
+        const TSoftObjectPtr<UAnimMontage>* Override = TraversalMontages.Find(Action);
+        if (Override && !Override->IsNull())
+        {
+            if (UAnimMontage* Authored = Override->LoadSynchronous())
+            {
+                // Preserve authored notify timings; only the per-character copy holds at the end.
+                Montage = DuplicateObject<UAnimMontage>(Authored, this,
+                    MakeUniqueObjectName(this, Authored->GetClass(), Authored->GetFName()));
+                Montage->ClearFlags(RF_Public | RF_Standalone);
+                Montage->SetFlags(RF_Transient);
+                Montage->bEnableAutoBlendOut = false;
+            }
+            // An explicitly assigned broken asset is an error, not a silent fallback.
+        }
+        else
+        {
+            Montage = AFTraversalMontageFactory::Create(
+                Cast<UAnimSequence>(GetTraversalSource(Action).LoadSynchronous()), this,
+                Action == EAFTraversalAction::Catch, HangPoseFreezeFraction);
+        }
+        FString Error;
+        if (AFTraversalMontageFactory::Validate(Montage, Error))
+        {
+            CachedTraversalMontages.Add(Action, Montage);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Afterfall traversal %s unavailable: %s"),
+                *StaticEnum<EAFTraversalAction>()->GetNameStringByValue(Index), *Error);
+        }
+    }
+}
+
+void AAFCharacter::GenerateTraversalMontages()
+{
+#if WITH_EDITOR
+    if (GetWorld() && GetWorld()->IsGameWorld())
+    {
+        UE_LOG(LogTemp, Warning, TEXT("Stop PIE before generating traversal assets."));
+        return;
+    }
+    Modify();
+    int32 Generated = 0;
+    for (uint8 Index = uint8(EAFTraversalAction::Hurdle); Index <= uint8(EAFTraversalAction::Climb); ++Index)
+    {
+        const EAFTraversalAction Action = static_cast<EAFTraversalAction>(Index);
+        if (const auto* Existing = TraversalMontages.Find(Action))
+        {
+            if (!Existing->IsNull()) continue; // Especially preserve AM_AF_Mantle_Stand.
+        }
+        UAnimSequence* Source = Cast<UAnimSequence>(GetTraversalSource(Action).LoadSynchronous());
+        if (!Source)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("Traversal setup: missing source for action %d"), Index);
+            continue;
+        }
+        const FString AssetName = TEXT("AM_AF_Auto_") + StaticEnum<EAFTraversalAction>()->GetNameStringByValue(Index);
+        if (UAnimMontage* Montage = AFTraversalMontageFactory::SaveDefault(Source, AssetName,
+            Action == EAFTraversalAction::Catch, HangPoseFreezeFraction))
+        {
+            TraversalMontages.Add(Action, TSoftObjectPtr<UAnimMontage>(Montage));
+            ++Generated;
+        }
+    }
+    MarkPackageDirty();
+    UE_LOG(LogTemp, Display, TEXT("Traversal setup: %d montages assigned to %s. Save this actor/BP. Existing overrides preserved."), Generated, *GetName());
+#endif
+}
+
+bool AAFCharacter::PlayTraversalMontage(EAFTraversalAction Action)
+{
+    // TObjectPtr map retains transient montages and their duplicated source sequences through GC.
+    const TObjectPtr<UAnimMontage>* Cached = CachedTraversalMontages.Find(Action);
+    UAnimMontage* Montage = Cached ? Cached->Get() : nullptr;
+    UAnimInstance* Anim = GetMesh()->GetAnimInstance();
+    if (!Montage || !Anim || GetMesh()->GetAnimationMode() != EAnimationMode::AnimationBlueprint)
+    {
+        TraversalDiagnostic = TEXT("Traversal requires the locomotion ABP with a final TraversalSlot node");
+        return false;
+    }
+    if (!TraversalAnimInstance)
+    {
+        TraversalAnimInstance = Anim;
+        SavedTraversalRootMotionMode = static_cast<uint8>(Anim->RootMotionMode.GetValue());
+    }
+    // Stop a held catch without letting its interruption callback cancel the new climb.
+    {
+        TGuardValue<bool> Guard(bFinishingTraversal, true);
+        if (ActiveTraversalMontage) Anim->Montage_Stop(0.1f, ActiveTraversalMontage);
+    }
+    MotionWarping->DisableAllRootMotionModifiers();
+    ActiveTraversalMontage = Montage;
+    SelectedTraversalAction = Action;
+    TraversalElapsed = 0.f;
+    TraversalAlpha = 0.f;
+    bTraversalBlocked = false;
+    const float Rate = FMath::Max(0.1f, TraversalVisualPlayRate);
+    TraversalDurationActive = Montage->GetPlayLength() / Rate;
+    TraversalTarget = TraversalTargetLocation - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+    MotionWarping->AddOrUpdateWarpTargetFromLocationAndRotation(AFTraversalMontageFactory::TargetName,
+        TraversalTarget, TraversalTargetRotation);
+    Anim->SetRootMotionMode(ERootMotionMode::RootMotionFromMontagesOnly);
+    GetCharacterMovement()->StopMovementImmediately();
+    GetCharacterMovement()->SetMovementMode(MOVE_Flying); // Root Z is applied; collision stays enabled.
+    GetCharacterMovement()->GravityScale = 0.f;
+    GetCharacterMovement()->bOrientRotationToMovement = false;
+    bUseControllerRotationYaw = false;
+    if (Anim->Montage_Play(Montage, Rate, EMontagePlayReturnType::MontageLength, 0.f, false) <= 0.f)
+    {
+        TraversalDiagnostic = TEXT("Montage_Play failed; check skeleton and TraversalSlot");
+        return false;
+    }
+    FOnMontageEnded EndDelegate;
+    EndDelegate.BindUObject(this, &AAFCharacter::HandleTraversalMontageEnded);
+    Anim->Montage_SetEndDelegate(EndDelegate, Montage);
+    SetTraversalWeaponStowed(true);
+    TraversalDiagnostic = TEXT("Root motion traversal");
+    return true;
+}
+
+void AAFCharacter::HandleTraversalMontageEnded(UAnimMontage* Montage, bool bInterrupted)
+{
+    if (!bFinishingTraversal && ActiveTraversalMontage == Montage && IsTraversalActive())
+    {
+        // Normal completion is handled after movement consumes the last root-motion frame.
+        TraversalDiagnostic = bInterrupted ? TEXT("Montage interrupted") : TEXT("Montage ended externally");
+        EndTraversalMove(false);
+    }
+}
+
+void AAFCharacter::HandleTraversalBlockingHit(UPrimitiveComponent* HitComponent, AActor* OtherActor,
+    UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit)
+{
+    if (ActiveTraversalMontage && TraversalState != EAFTraversalState::Hanging && IsTraversalActive())
+    {
+        const bool bArrivalFloor = GetCharacterMovement()->IsWalkable(Hit) &&
+            FVector::Dist(GetActorLocation(), TraversalTargetLocation) <= TraversalArrivalTolerance;
+        if (!bArrivalFloor && (Hit.bStartPenetrating ||
+            FVector::DotProduct(Hit.TraceEnd - Hit.TraceStart, Hit.ImpactNormal) < -KINDA_SMALL_NUMBER))
+        {
+            // Do not change movement mode from inside CharacterMovement's sweep callback.
+            bTraversalBlocked = true;
+        }
+    }
+}
+
+bool AAFCharacter::HasTraversalSupport(const FVector& CapsuleLocation, FHitResult& OutHit) const
+{
+    if (!GetWorld() || !GetCapsuleComponent() || !GetCharacterMovement()) return false;
+    const FVector Feet = CapsuleLocation - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(AFTraversalSupport), false, this);
+    Params.AddIgnoredActor(EquippedWeapon);
+    return GetWorld()->LineTraceSingleByChannel(OutHit, Feet + FVector(0.f, 0.f, 8.f),
+        Feet - FVector(0.f, 0.f, 12.f), ECC_Visibility, Params) &&
+        GetCharacterMovement()->IsWalkable(OutHit) && OutHit.GetComponent();
+}
+
+bool AAFCharacter::RefreshTraversalTarget()
+{
+    if (!TraversalSupportComponent.IsValid()) return false;
+    const FTransform Transform = TraversalSupportComponent->GetComponentTransform();
+    TraversalTargetLocation = Transform.TransformPosition(TraversalSupportLocalTarget);
+    TraversalTargetRotation = (Transform.GetRotation() * TraversalSupportLocalRotation).Rotator();
+    if (!CanOccupyCapsuleAt(TraversalTargetLocation)) return false;
+    FHitResult Support;
+    if (TraversalState != EAFTraversalState::Catching && !HasTraversalSupport(TraversalTargetLocation, Support)) return false;
+    if (TraversalState == EAFTraversalState::Catching)
+    {
+        if (!HangingLedgeComponent.IsValid() || !IsHangAnchorValid()) return false;
+        HangingLedgeTop = Transform.TransformPosition(HangingLocalTop);
+        HangingWallNormal = Transform.TransformVectorNoScale(HangingLocalNormal).GetSafeNormal();
+        UpdateHandContacts();
+    }
+    TraversalTarget = TraversalTargetLocation - FVector(0.f, 0.f, GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
+    MotionWarping->AddOrUpdateWarpTargetFromLocationAndRotation(AFTraversalMontageFactory::TargetName,
+        TraversalTarget, TraversalTargetRotation);
+    return true;
+}
+
+void AAFCharacter::RecordTraversalDetection(const FHitResult& Wall, const FHitResult& Top, float Height)
+{
+    bHasTraversalDetection = true;
+    DebugWallLocation = Wall.ImpactPoint;
+    DebugTopLocation = Top.ImpactPoint;
+    MeasuredObstacleHeight = Height;
+    SelectedTraversalAction = EAFTraversalAction::None;
+    DebugLandingLocation = Top.ImpactPoint;
+    TraversalTarget = Top.ImpactPoint;
+    TraversalDiagnostic = TEXT("Obstacle detected");
+}
+
+void AAFCharacter::UpdateHandContacts()
+{
+    const FVector Right = FVector::CrossProduct(FVector::UpVector, -HangingWallNormal).GetSafeNormal();
+    // Useful input for IK; this does not itself solve arm lengths or lock animated hands.
+    LeftHandLedgeLocation = HangingLedgeTop - Right * 20.f;
+    RightHandLedgeLocation = HangingLedgeTop + Right * 20.f;
+}
+
+void AAFCharacter::DrawTraversalDebug() const
+{
+#if ENABLE_DRAW_DEBUG
+    if ((!bDrawTraversalDebug && CVarAFTraversalDebug.GetValueOnGameThread() == 0) || !bHasTraversalDetection) return;
+    DrawDebugSphere(GetWorld(), DebugWallLocation, 8.f, 8, FColor::Red);
+    DrawDebugSphere(GetWorld(), DebugTopLocation, 8.f, 8, FColor::Green);
+    DrawDebugSphere(GetWorld(), DebugLandingLocation, 8.f, 8, FColor::Blue);
+    DrawDebugCoordinateSystem(GetWorld(), TraversalTarget, TraversalTargetRotation, 35.f, false, -1.f, 0, 2.f);
+    DrawDebugSphere(GetWorld(), TraversalTarget, 10.f, 8, FColor::Cyan);
+    const FString Label = FString::Printf(TEXT("%s | height %.1f cm | %.0f%%\n%s\nred: wall green: top blue: landing cyan: TraversalTarget (feet)"),
+        *StaticEnum<EAFTraversalAction>()->GetNameStringByValue(int64(SelectedTraversalAction)),
+        MeasuredObstacleHeight, TraversalAlpha * 100.f, *TraversalDiagnostic);
+    DrawDebugString(GetWorld(), GetActorLocation() + FVector(0.f, 0.f, 125.f), Label, nullptr, FColor::White, 0.f, true);
+#endif
+}
+
+
+bool AAFCharacter::IsHangAnchorValid() const
+{
+    if (!HangingLedgeComponent.IsValid()) return false;
+    const FVector Top = HangingLedgeComponent->GetComponentTransform().TransformPosition(HangingLocalTop);
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(AFHangSupport), false, this);
+    Params.AddIgnoredActor(EquippedWeapon);
+    FHitResult Hit;
+    return GetWorld()->LineTraceSingleByChannel(Hit, Top + FVector(0.f, 0.f, 12.f),
+        Top - FVector(0.f, 0.f, 12.f), ECC_Visibility, Params) && GetCharacterMovement()->IsWalkable(Hit) &&
+        Hit.GetComponent() == HangingLedgeComponent.Get();
 }

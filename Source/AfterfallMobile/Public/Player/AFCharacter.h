@@ -12,6 +12,10 @@ class AAFWeaponBase;
 class UAnimSequenceBase;
 class UAnimSequence;
 class UAnimInstance;
+class UAnimMontage;
+class UMotionWarpingComponent;
+class UPrimitiveComponent;
+class USceneComponent;
 
 UENUM(BlueprintType)
 enum class EAFTraversalState : uint8
@@ -19,7 +23,14 @@ enum class EAFTraversalState : uint8
     None UMETA(DisplayName="Normal"),
     Vaulting UMETA(DisplayName="Vaulting"),
     Mantling UMETA(DisplayName="Mantling"),
-    Hanging UMETA(DisplayName="Ledge Hang")
+    Hanging UMETA(DisplayName="Ledge Hang"),
+    Catching UMETA(DisplayName="Catching Ledge")
+};
+
+UENUM(BlueprintType)
+enum class EAFTraversalAction : uint8
+{
+    None, Hurdle, VaultRun, VaultWalk, MantleWalk, MantleRun, MantleStand, Catch, Climb
 };
 
 UCLASS()
@@ -152,7 +163,53 @@ public:
     float TraversalAlpha = 0.0f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation")
-    bool bHideWeaponDuringTraversal = true;
+    bool bHideWeaponDuringTraversal = false;
+
+    // Optional authored assets. Missing entries use cached, generated montages.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Montages")
+    TMap<EAFTraversalAction, TSoftObjectPtr<UAnimMontage>> TraversalMontages;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Afterfall|Traversal")
+    TObjectPtr<UMotionWarpingComponent> MotionWarping;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Debug")
+    EAFTraversalAction SelectedTraversalAction = EAFTraversalAction::None;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Debug")
+    float MeasuredObstacleHeight = 0.f;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Debug")
+    FVector TraversalTarget = FVector::ZeroVector;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Afterfall|Traversal|Debug")
+    bool bDrawTraversalDebug = false;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Debug")
+    FString TraversalDiagnostic;
+
+    // Spatial contacts for a future AnimGraph IK pass; world space, not warp targets.
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|IK")
+    FVector LeftHandLedgeLocation = FVector::ZeroVector;
+
+    UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category="Afterfall|Traversal|IK")
+    FVector RightHandLedgeLocation = FVector::ZeroVector;
+
+    UPROPERTY(EditDefaultsOnly, Category="Afterfall|Traversal|Montages", meta=(ClampMin="1"))
+    float TraversalArrivalTolerance = 18.f;
+
+    // Uses a socket when available, otherwise the Manny spine bone as an initial sling.
+    UPROPERTY(EditDefaultsOnly, Category="Afterfall|Traversal|Weapon")
+    FName WeaponSlingSocket = TEXT("Weapon_Back");
+
+    UPROPERTY(EditDefaultsOnly, Category="Afterfall|Traversal|Weapon")
+    FName WeaponSlingFallbackBone = TEXT("spine_03");
+
+    UPROPERTY(EditDefaultsOnly, Category="Afterfall|Traversal|Weapon")
+    FTransform WeaponSlingOffset = FTransform(FRotator(0.f, 90.f, 30.f), FVector(-15.f, 0.f, 0.f));
+
+    // Select a placed BP_AFCharacter, then click this button in Details. Never overwrites assets.
+    UFUNCTION(CallInEditor, BlueprintCallable, Category="Afterfall|Traversal|Setup")
+    void GenerateTraversalMontages();
 
     // Existing Manny rifle jump assets are used automatically so normal jumps
     // no longer play the ground locomotion pose in mid-air.
@@ -299,7 +356,6 @@ private:
 
     FVector TraversalStartLocation = FVector::ZeroVector;
     FVector TraversalTargetLocation = FVector::ZeroVector;
-    FRotator TraversalStartRotation = FRotator::ZeroRotator;
     FRotator TraversalTargetRotation = FRotator::ZeroRotator;
     float TraversalElapsed = 0.f;
     float TraversalDurationActive = 0.5f;
@@ -337,7 +393,6 @@ private:
     float JumpApexVisualDuration = 0.0f;
     TSubclassOf<UAnimInstance> SavedLocomotionAnimClass;
     FTimerHandle JumpVisualTimer;
-    FTimerHandle TraversalPoseTimer;
 
     void UpdateTraversal(float DeltaSeconds);
     void UpdateHanging(float DeltaSeconds);
@@ -356,8 +411,7 @@ private:
         EAFTraversalState NewState,
         const FVector& TargetLocation,
         const FRotator& TargetRotation,
-        float Duration,
-        TSoftObjectPtr<UAnimSequenceBase> VisualAnimation,
+        EAFTraversalAction Action,
         float ObstacleTopZ);
     void EnterLedgeHang(
         const FHitResult& WallHit,
@@ -370,10 +424,48 @@ private:
     void EndTraversalMove(bool bCompleted);
     void SetTraversalWeaponStowed(bool bStowed);
     bool PlayFullBodySequence(TSoftObjectPtr<UAnimSequenceBase> Sequence, bool bLoop, float PlayRate = -1.0f);
-    float ResolveTraversalDuration(TSoftObjectPtr<UAnimSequenceBase> Sequence, float FallbackDuration) const;
+
     void SetJumpVisualPhase(EAFJumpVisualPhase NewPhase);
     void UpdateJumpVisual(float DeltaSeconds);
     void RestoreLocomotionAnimationBlueprint();
-    void PauseTraversalVisualForHang();
+    void CacheTraversalMontages();
+    TSoftObjectPtr<UAnimSequenceBase> GetTraversalSource(EAFTraversalAction Action) const;
+    bool PlayTraversalMontage(EAFTraversalAction Action);
+    void HandleTraversalMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+    UFUNCTION()
+    void HandleTraversalBlockingHit(UPrimitiveComponent* HitComponent, AActor* OtherActor,
+        UPrimitiveComponent* OtherComp, FVector NormalImpulse, const FHitResult& Hit);
+    bool HasTraversalSupport(const FVector& CapsuleLocation, FHitResult& OutHit) const;
+    void RecordTraversalDetection(const FHitResult& Wall, const FHitResult& Top, float Height);
+    void DrawTraversalDebug() const;
+    bool RefreshTraversalTarget();
+    bool IsHangAnchorValid() const;
+    void UpdateHandContacts();
+
+    UPROPERTY(Transient)
+    TMap<EAFTraversalAction, TObjectPtr<UAnimMontage>> CachedTraversalMontages;
+    UPROPERTY(Transient)
+    TObjectPtr<UAnimMontage> ActiveTraversalMontage;
+    UPROPERTY(Transient)
+    TObjectPtr<UAnimInstance> TraversalAnimInstance;
+    uint8 SavedTraversalRootMotionMode = 0;
+    bool bTraversalBlocked = false;
+    bool bFinishingTraversal = false;
+    bool bHasTraversalDetection = false;
+    FVector DebugWallLocation = FVector::ZeroVector;
+    FVector DebugTopLocation = FVector::ZeroVector;
+    FVector DebugLandingLocation = FVector::ZeroVector;
+    TWeakObjectPtr<UPrimitiveComponent> TraversalSupportComponent;
+    FVector TraversalSupportLocalTarget = FVector::ZeroVector;
+    FQuat TraversalSupportLocalRotation = FQuat::Identity;
+    TWeakObjectPtr<UPrimitiveComponent> HangingLedgeComponent;
+    FVector HangingLocalTop = FVector::ZeroVector;
+    FVector HangingLocalNormal = FVector::ZeroVector;
+    bool bWeaponStowed = false;
+    TWeakObjectPtr<USceneComponent> WeaponPreviousParent;
+    FName WeaponPreviousSocket;
+    FTransform WeaponPreviousTransform;
+    bool bWeaponPreviousHidden = false;
+    bool bWeaponPreviousCollision = false;
     FVector GetTraversalForward() const;
 };
