@@ -206,6 +206,12 @@ public:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal", meta=(ClampMin="0.0"))
     float HurdleSpeedThreshold = 330.0f;
 
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal", meta=(ClampMin="20.0"))
+    float HurdleMaxHeight = 72.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal", meta=(ClampMin="0.1", ClampMax="0.98"))
+    float HangPoseFreezeFraction = 0.88f;
+
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
     bool bAutoLedgeGrab = true;
 
@@ -317,6 +323,7 @@ private:
     float JumpApexVisualDuration = 0.0f;
     TSubclassOf<UAnimInstance> SavedLocomotionAnimClass;
     FTimerHandle JumpVisualTimer;
+    FTimerHandle TraversalPoseTimer;
 
     void UpdateTraversal(float DeltaSeconds);
     void UpdateHanging(float DeltaSeconds);
@@ -348,5 +355,6 @@ private:
     void SetJumpVisualPhase(EAFJumpVisualPhase NewPhase);
     void UpdateJumpVisual(float DeltaSeconds);
     void RestoreLocomotionAnimationBlueprint();
+    void PauseTraversalVisualForHang();
     FVector GetTraversalForward() const;
 };
