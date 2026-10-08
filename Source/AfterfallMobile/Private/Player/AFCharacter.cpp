@@ -34,6 +34,24 @@ AAFCharacter::AAFCharacter()
     JumpLandAnimation = TSoftObjectPtr<UAnimSequenceBase>(
         FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Anims/Rifle/Jump/MM_Rifle_Jump_Fall_Land.MM_Rifle_Jump_Fall_Land")));
 
+    // Retargeted Game Animation Sample assets exported to Manny.
+    VaultRunAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Afterfall/Animations/Traversal_Retargeted/M_Neutral_Traversal_Vault_1_0_run_F_Lfoot.M_Neutral_Traversal_Vault_1_0_run_F_Lfoot")));
+    VaultWalkAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Afterfall/Animations/Traversal_Retargeted/M_Neutral_Traversal_Vault_1_0_walk_F_Rfoot.M_Neutral_Traversal_Vault_1_0_walk_F_Rfoot")));
+    HurdleRunAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Afterfall/Animations/Traversal_Retargeted/M_Neutral_Traversal_Hurdle_1_0_run_F_LFoot.M_Neutral_Traversal_Hurdle_1_0_run_F_LFoot")));
+    MantleLowAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Afterfall/Animations/Traversal_Retargeted/M_Neutral_Traversal_Mantle_1_0_walk_F_Lfoot.M_Neutral_Traversal_Mantle_1_0_walk_F_Lfoot")));
+    MantleMediumAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Afterfall/Animations/Traversal_Retargeted/M_Neutral_Traversal_Mantle_1_0_run_F_Rfoot.M_Neutral_Traversal_Mantle_1_0_run_F_Rfoot")));
+    LedgeCatchAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Afterfall/Animations/Traversal_Retargeted/M_Neutral_Traversal_Catch_Mantle_high.M_Neutral_Traversal_Catch_Mantle_high")));
+    LedgeClimbAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Afterfall/Animations/Traversal_Retargeted/M_Neutral_Traversal_Mantle_1_0_stand_F_Lfoot.M_Neutral_Traversal_Mantle_1_0_stand_F_Lfoot")));
+    HighClimbAnimation = TSoftObjectPtr<UAnimSequenceBase>(
+        FSoftObjectPath(TEXT("/Game/Afterfall/Animations/Traversal_Retargeted/M_Neutral_Traversal_Climb_Start_2_5_stand_F_Lfoot.M_Neutral_Traversal_Climb_Start_2_5_stand_F_Lfoot")));
+
     bUseControllerRotationPitch = false;
     bUseControllerRotationYaw = false;
     bUseControllerRotationRoll = false;
@@ -487,12 +505,21 @@ bool AAFCharacter::TryContextTraversal()
         FVector LandingLocation;
         if (FindVaultLanding(WallHit, LandingLocation))
         {
+            const float HorizontalSpeed = GetVelocity().Size2D();
+            TSoftObjectPtr<UAnimSequenceBase> VaultVisual =
+                HorizontalSpeed >= HurdleSpeedThreshold
+                    ? HurdleRunAnimation
+                    : (HorizontalSpeed >= 140.0f
+                        ? VaultRunAnimation
+                        : VaultWalkAnimation);
+
             StartTraversalMove(
                 EAFTraversalState::Vaulting,
                 LandingLocation,
                 TargetRotation,
                 VaultDuration,
-                FMath::Max(85.0f, ObstacleHeight + 45.0f));
+                FMath::Max(85.0f, ObstacleHeight + 45.0f),
+                VaultVisual);
             return true;
         }
     }
@@ -509,12 +536,27 @@ bool AAFCharacter::TryContextTraversal()
         return false;
     }
 
+    TSoftObjectPtr<UAnimSequenceBase> MantleVisual;
+    if (ObstacleHeight >= 165.0f)
+    {
+        MantleVisual = HighClimbAnimation;
+    }
+    else if (ObstacleHeight >= 115.0f || GetVelocity().Size2D() >= 220.0f)
+    {
+        MantleVisual = MantleMediumAnimation;
+    }
+    else
+    {
+        MantleVisual = MantleLowAnimation;
+    }
+
     StartTraversalMove(
         EAFTraversalState::Mantling,
         MantleTarget,
         TargetRotation,
         MantleDuration,
-        38.0f);
+        38.0f,
+        MantleVisual);
 
     return true;
 }
@@ -880,7 +922,8 @@ void AAFCharacter::StartTraversalMove(
     const FVector& TargetLocation,
     const FRotator& TargetRotation,
     float Duration,
-    float ArcHeight)
+    float ArcHeight,
+    TSoftObjectPtr<UAnimSequenceBase> VisualAnimation)
 {
     if (!GetCharacterMovement())
     {
@@ -898,14 +941,25 @@ void AAFCharacter::StartTraversalMove(
     TraversalStartRotation = GetActorRotation();
     TraversalTargetRotation = TargetRotation;
     TraversalElapsed = 0.0f;
-    TraversalDurationActive = FMath::Max(0.05f, Duration);
+    TraversalDurationActive =
+        ResolveTraversalDuration(VisualAnimation, FMath::Max(0.05f, Duration));
     TraversalArcHeight = FMath::Max(0.0f, ArcHeight);
+
+    if (!VisualAnimation.IsNull())
+    {
+        PlayFullBodySequence(VisualAnimation, false, TraversalVisualPlayRate);
+    }
 
     GetCharacterMovement()->StopMovementImmediately();
     GetCharacterMovement()->SetMovementMode(MOVE_Flying);
     GetCharacterMovement()->GravityScale = 0.0f;
     GetCharacterMovement()->bOrientRotationToMovement = false;
     bUseControllerRotationYaw = false;
+
+    if (!LedgeCatchAnimation.IsNull())
+    {
+        PlayFullBodySequence(LedgeCatchAnimation, false, TraversalVisualPlayRate);
+    }
 
     OnTraversalStateChanged(TraversalState);
 }
@@ -1026,7 +1080,8 @@ void AAFCharacter::ClimbFromLedge()
         Target,
         TargetRotation,
         MantleDuration,
-        42.0f);
+        42.0f,
+        LedgeClimbAnimation);
 }
 
 void AAFCharacter::FinishTraversalMove()
@@ -1052,6 +1107,7 @@ void AAFCharacter::FinishTraversalMove()
 
     HangingWallNormal = FVector::ZeroVector;
     HangingLedgeTop = FVector::ZeroVector;
+    RestoreLocomotionAnimationBlueprint();
     SetTraversalWeaponStowed(false);
 
     OnTraversalStateChanged(TraversalState);
@@ -1196,9 +1252,26 @@ void AAFCharacter::UpdateJumpVisual(float DeltaSeconds)
     }
 }
 
+float AAFCharacter::ResolveTraversalDuration(
+    TSoftObjectPtr<UAnimSequenceBase> Sequence,
+    float FallbackDuration) const
+{
+    UAnimSequenceBase* LoadedSequence = Sequence.LoadSynchronous();
+    if (!LoadedSequence)
+    {
+        return FMath::Max(0.05f, FallbackDuration);
+    }
+
+    return FMath::Max(
+        0.05f,
+        LoadedSequence->GetPlayLength() /
+            FMath::Max(0.1f, TraversalVisualPlayRate));
+}
+
 bool AAFCharacter::PlayFullBodySequence(
     TSoftObjectPtr<UAnimSequenceBase> Sequence,
-    bool bLoop)
+    bool bLoop,
+    float PlayRate)
 {
     if (!GetMesh())
     {
@@ -1227,7 +1300,9 @@ bool AAFCharacter::PlayFullBodySequence(
     if (UAnimSingleNodeInstance* SingleNode =
         GetMesh()->GetSingleNodeInstance())
     {
-        SingleNode->SetPlayRate(FMath::Max(0.1f, JumpVisualPlayRate));
+        const float ResolvedPlayRate =
+            PlayRate > 0.0f ? PlayRate : JumpVisualPlayRate;
+        SingleNode->SetPlayRate(FMath::Max(0.1f, ResolvedPlayRate));
     }
 
     bJumpVisualActive = true;
