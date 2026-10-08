@@ -1,4 +1,6 @@
 #include "Player/AFCharacter.h"
+#include "Player/AFTraversalPath.h"
+#include "Animation/AnimSequence.h"
 
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimSequenceBase.h"
@@ -142,6 +144,20 @@ void AAFCharacter::LookPitch(float Value)
     AddControllerPitchInput(Value);
 }
 
+void AAFCharacter::CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult)
+{
+    Super::CalcCamera(DeltaTime, OutResult);
+    if (IsLocallyControlled() && GetMesh())
+    {
+        // Spring-arm collision must stay enabled. When a wall retracts the
+        // camera into the body, hide the body only from its owning camera.
+        const FVector Offset = OutResult.Location - GetActorLocation();
+        const bool bInsideBody = Offset.SizeSquared2D() < FMath::Square(70.0f)
+            && FMath::Abs(Offset.Z) < GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 30.0f;
+        GetMesh()->SetOwnerNoSee(bSavedOwnerNoSee || bInsideBody);
+    }
+}
+
 void AAFCharacter::FirePrimary()
 {
     if (TraversalState == EAFTraversalState::None &&
@@ -161,6 +177,7 @@ void AAFCharacter::BeginPlay()
     if (GetMesh())
     {
         SavedLocomotionAnimClass = GetMesh()->GetAnimClass();
+        bSavedOwnerNoSee = GetMesh()->bOwnerNoSee;
     }
 
     CameraBoom->TargetArmLength = NormalCameraArmLength;
@@ -276,6 +293,10 @@ void AAFCharacter::Tick(float Dt)
         GetCharacterMovement()->IsFalling();
     VerticalVelocity = GetVelocity().Z;
 
+    if (bIsInAir && !bJumpVisualActive)
+    {
+        SetJumpVisualPhase(EAFJumpVisualPhase::Falling);
+    }
     UpdateJumpVisual(Dt);
 
     if (TraversalState == EAFTraversalState::Vaulting ||
@@ -294,8 +315,8 @@ void AAFCharacter::Tick(float Dt)
         LedgeGrabScanCooldown -= Dt;
         if (LedgeGrabScanCooldown <= 0.f)
         {
-            LedgeGrabScanCooldown = 0.05f;
             TryAutoGrabLedge();
+            LedgeGrabScanCooldown = FMath::Max(LedgeGrabScanCooldown, 0.05f);
         }
     }
 }
@@ -437,19 +458,9 @@ void AAFCharacter::DropFromLedge()
         return;
     }
 
-    TraversalState = EAFTraversalState::None;
-    OnTraversalStateChanged(TraversalState);
-
-    GetCharacterMovement()->GravityScale = 1.0f;
-    GetCharacterMovement()->SetMovementMode(MOVE_Falling);
-    GetCharacterMovement()->bOrientRotationToMovement = true;
-    GetCharacterMovement()->Velocity = FVector::ZeroVector;
-    bUseControllerRotationYaw = false;
-
-    LaunchCharacter(
-        HangingWallNormal.GetSafeNormal2D() * 140.0f + FVector(0.0f, 0.0f, -90.0f),
-        true,
-        true);
+    const FVector AwayFromWall = HangingWallNormal.GetSafeNormal2D();
+    EndTraversalMove(false);
+    LaunchCharacter(AwayFromWall * 140.0f + FVector(0.0f, 0.0f, -90.0f), true, true);
 
     bFallLoopVisualActive = false;
     JumpVisualPhase = EAFJumpVisualPhase::None;
@@ -492,13 +503,7 @@ bool AAFCharacter::TryContextTraversal()
         return false;
     }
 
-    FVector Forward = GetTraversalForward();
-    if (Forward.IsNearlyZero())
-    {
-        Forward = GetActorForwardVector().GetSafeNormal2D();
-    }
-
-    FRotator TargetRotation = Forward.Rotation();
+    FRotator TargetRotation = (-WallHit.ImpactNormal.GetSafeNormal2D()).Rotation();
     TargetRotation.Pitch = 0.f;
     TargetRotation.Roll = 0.f;
 
@@ -510,39 +515,37 @@ bool AAFCharacter::TryContextTraversal()
     if (ObstacleHeight <= VaultMaxHeight)
     {
         FVector LandingLocation;
-        if (FindVaultLanding(WallHit, LandingLocation))
+        if (FindVaultLanding(WallHit, TopHit, LandingLocation))
         {
             const bool bUseHurdle =
                 ObstacleHeight <= HurdleMaxHeight &&
                 HorizontalSpeed >= HurdleSpeedThreshold;
 
             TSoftObjectPtr<UAnimSequenceBase> VaultVisual;
-            float ArcHeight = 42.0f;
 
             if (bUseHurdle)
             {
                 VaultVisual = HurdleRunAnimation;
-                ArcHeight = 24.0f;
             }
             else if (HorizontalSpeed >= 185.0f)
             {
                 VaultVisual = VaultRunAnimation;
-                ArcHeight = 38.0f;
             }
             else
             {
                 VaultVisual = VaultWalkAnimation;
-                ArcHeight = 32.0f;
             }
 
-            StartTraversalMove(
+            if (StartTraversalMove(
                 EAFTraversalState::Vaulting,
                 LandingLocation,
                 TargetRotation,
                 VaultDuration,
-                ArcHeight,
-                VaultVisual);
-            return true;
+                VaultVisual,
+                TopHit.ImpactPoint.Z))
+            {
+                return true;
+            }
         }
     }
 
@@ -586,15 +589,13 @@ bool AAFCharacter::TryContextTraversal()
         MantleVisual = LedgeClimbAnimation; // stand variant
     }
 
-    StartTraversalMove(
+    return StartTraversalMove(
         EAFTraversalState::Mantling,
         MantleTarget,
         TargetRotation,
         MantleDuration,
-        12.0f,
-        MantleVisual);
-
-    return true;
+        MantleVisual,
+        TopHit.ImpactPoint.Z);
 }
 
 void AAFCharacter::UpdateTraversal(float DeltaSeconds)
@@ -605,6 +606,7 @@ void AAFCharacter::UpdateTraversal(float DeltaSeconds)
         return;
     }
 
+    const float PreviousAlpha = TraversalAlpha;
     TraversalElapsed += FMath::Max(0.f, DeltaSeconds);
 
     const float Alpha = FMath::Clamp(
@@ -613,46 +615,31 @@ void AAFCharacter::UpdateTraversal(float DeltaSeconds)
         1.f);
     TraversalAlpha = Alpha;
 
-    // The visual animation and the capsule must follow the same kind of move.
-    // Vaults travel forward in a low arc. Mantles primarily rise onto the
-    // ledge instead of following the old large symmetric jump parabola.
-    const float MoveAlpha =
-        FMath::SmoothStep(0.0f, 1.0f, Alpha);
-
-    FVector NewLocation =
-        FMath::Lerp(
-            TraversalStartLocation,
-            TraversalTargetLocation,
-            MoveAlpha);
-
-    if (TraversalState == EAFTraversalState::Vaulting)
+    // Sweep every frame as well as checking the route before starting. Moving
+    // props/ceilings can invalidate a previously clear traversal. Visit phase
+    // boundaries on a slow frame instead of cutting diagonally through a wall.
+    const float Steps[] = {0.35f, 0.75f, Alpha};
+    for (float Step : Steps)
     {
-        NewLocation.Z +=
-            FMath::Sin(Alpha * PI) * TraversalArcHeight;
+        if (Step <= PreviousAlpha || Step > Alpha)
+        {
+            continue;
+        }
+        const FQuat NewRotation = FQuat::Slerp(
+            TraversalStartRotation.Quaternion(), TraversalTargetRotation.Quaternion(),
+            FMath::SmoothStep(0.0f, 1.0f, Step));
+        FHitResult MoveHit;
+        SetActorLocationAndRotation(EvaluateTraversalLocation(Step), NewRotation, true, &MoveHit);
+        if (MoveHit.bBlockingHit || MoveHit.bStartPenetrating)
+        {
+            EndTraversalMove(false);
+            return;
+        }
     }
-    else
-    {
-        // Small lift only. The target location already contains the wall-top
-        // elevation, so a huge extra arc makes hands/feet miss the obstacle.
-        NewLocation.Z +=
-            FMath::Sin(Alpha * PI) * TraversalArcHeight;
-    }
-
-    const FRotator NewRotation = FMath::Lerp(
-        TraversalStartRotation,
-        TraversalTargetRotation,
-        MoveAlpha);
-
-    SetActorLocationAndRotation(
-        NewLocation,
-        NewRotation,
-        false,
-        nullptr,
-        ETeleportType::None);
 
     if (Alpha >= 1.0f - KINDA_SMALL_NUMBER)
     {
-        FinishTraversalMove();
+        EndTraversalMove(true);
     }
 }
 
@@ -687,6 +674,7 @@ void AAFCharacter::UpdateHanging(float DeltaSeconds)
         false,
         this);
     Params.AddIgnoredActor(this);
+    Params.AddIgnoredActor(EquippedWeapon);
 
     FHitResult WallHit;
     const FVector WallProbeStart =
@@ -717,10 +705,26 @@ void AAFCharacter::UpdateHanging(float DeltaSeconds)
     Adjusted.X = DesiredSurfacePoint.X;
     Adjusted.Y = DesiredSurfacePoint.Y;
 
-    if (CanOccupyCapsuleAt(Adjusted))
+    // Recheck the lip at the new position. A wall continuing sideways does
+    // not imply the ledge does, and climb-up must use the new ledge position.
+    const FVector TopXY = WallHit.ImpactPoint - HorizontalNormal * 10.0f;
+    FHitResult TopHit;
+    if (!GetWorld()->LineTraceSingleByChannel(TopHit,
+            FVector(TopXY.X, TopXY.Y, HangingLedgeTop.Z + 20.0f),
+            FVector(TopXY.X, TopXY.Y, HangingLedgeTop.Z - 20.0f),
+            ECC_Visibility, Params) ||
+        !GetCharacterMovement()->IsWalkable(TopHit) ||
+        FVector::DotProduct(HorizontalNormal, HangingWallNormal) < 0.9f)
+    {
+        return;
+    }
+    Adjusted.Z = TopHit.ImpactPoint.Z - FMath::Max(10.0f, HangBodyDrop);
+    if (CanOccupyCapsuleAt(Adjusted) && CanMoveCapsuleBetween(GetActorLocation(), Adjusted))
     {
         HangingWallNormal = WallHit.ImpactNormal.GetSafeNormal();
-        SetActorLocation(Adjusted, false);
+        HangingLedgeTop = TopHit.ImpactPoint;
+        FHitResult MoveHit;
+        SetActorLocationAndRotation(Adjusted, (-HorizontalNormal).Rotation(), true, &MoveHit);
     }
 }
 
@@ -732,6 +736,11 @@ bool AAFCharacter::TryAutoGrabLedge()
         !GetCapsuleComponent() ||
         !GetCharacterMovement() ||
         !GetCharacterMovement()->IsFalling())
+    {
+        return false;
+    }
+
+    if (LedgeGrabScanCooldown > 0.0f)
     {
         return false;
     }
@@ -751,6 +760,7 @@ bool AAFCharacter::TryAutoGrabLedge()
         false,
         this);
     Params.AddIgnoredActor(this);
+    Params.AddIgnoredActor(EquippedWeapon);
 
     FHitResult WallHit;
     const FVector WallStart =
@@ -831,6 +841,7 @@ bool AAFCharacter::FindObstacleTop(
         false,
         this);
     Params.AddIgnoredActor(this);
+    Params.AddIgnoredActor(EquippedWeapon);
 
     FVector WallStart = GetActorLocation();
     WallStart.Z = FootZ + 55.0f;
@@ -883,6 +894,7 @@ bool AAFCharacter::FindObstacleTop(
 
 bool AAFCharacter::FindVaultLanding(
     const FHitResult& WallHit,
+    const FHitResult& TopHit,
     FVector& OutLandingLocation) const
 {
     if (!GetWorld() || !GetCapsuleComponent())
@@ -899,6 +911,7 @@ bool AAFCharacter::FindVaultLanding(
         false,
         this);
     Params.AddIgnoredActor(this);
+    Params.AddIgnoredActor(EquippedWeapon);
 
     for (int32 Attempt = 0; Attempt < 4; ++Attempt)
     {
@@ -924,7 +937,11 @@ bool AAFCharacter::FindVaultLanding(
             continue;
         }
 
-        if (FloorHit.ImpactNormal.Z < 0.62f)
+        // A broad platform is a mantle, not a vault landing. Do not vault
+        // down an arbitrary drop or onto the next taller obstacle.
+        if (!GetCharacterMovement()->IsWalkable(FloorHit) ||
+            FloorHit.ImpactPoint.Z > TopHit.ImpactPoint.Z - 20.0f ||
+            FMath::Abs(FloorHit.ImpactPoint.Z - FootZ) > 60.0f)
         {
             continue;
         }
@@ -950,36 +967,48 @@ bool AAFCharacter::CanOccupyCapsuleAt(const FVector& WorldLocation) const
     }
 
     const float Radius =
-        GetCapsuleComponent()->GetScaledCapsuleRadius() * 0.96f;
+        GetCapsuleComponent()->GetScaledCapsuleRadius();
     const float HalfHeight =
-        GetCapsuleComponent()->GetScaledCapsuleHalfHeight() * 0.96f;
+        GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
     FCollisionQueryParams Params(
         SCENE_QUERY_STAT(AFTraversalClearance),
         false,
         this);
     Params.AddIgnoredActor(this);
+    Params.AddIgnoredActor(EquippedWeapon);
 
     return !GetWorld()->OverlapBlockingTestByChannel(
         WorldLocation,
         FQuat::Identity,
-        ECC_Pawn,
+        GetCapsuleComponent()->GetCollisionObjectType(),
         FCollisionShape::MakeCapsule(Radius, HalfHeight),
-        Params);
+        Params, FCollisionResponseParams(GetCapsuleComponent()->GetCollisionResponseToChannels()));
 }
 
-void AAFCharacter::StartTraversalMove(
+bool AAFCharacter::StartTraversalMove(
     EAFTraversalState NewState,
     const FVector& TargetLocation,
     const FRotator& TargetRotation,
     float Duration,
-    float ArcHeight,
-    TSoftObjectPtr<UAnimSequenceBase> VisualAnimation)
+    TSoftObjectPtr<UAnimSequenceBase> VisualAnimation,
+    float ObstacleTopZ)
 {
-    if (!GetCharacterMovement())
+    if (!GetCharacterMovement() || !GetCapsuleComponent() || !GetWorld())
     {
-        return;
+        return false;
     }
+
+    TraversalStartLocation = GetActorLocation();
+    TraversalTargetLocation = TargetLocation;
+    TraversalClearanceZ = FMath::Max3(
+        TraversalStartLocation.Z, TargetLocation.Z,
+        ObstacleTopZ + GetCapsuleComponent()->GetScaledCapsuleHalfHeight() + 3.0f);
+    if (!CanOccupyCapsuleAt(TargetLocation) || !IsTraversalPathClear())
+    {
+        return false;
+    }
+    SaveTraversalMovementSettings();
 
     StopAiming();
     StopPrimaryFire();
@@ -992,9 +1021,9 @@ void AAFCharacter::StartTraversalMove(
     TraversalStartRotation = GetActorRotation();
     TraversalTargetRotation = TargetRotation;
     TraversalElapsed = 0.0f;
+    TraversalAlpha = 0.0f;
     TraversalDurationActive =
         ResolveTraversalDuration(VisualAnimation, FMath::Max(0.05f, Duration));
-    TraversalArcHeight = FMath::Max(0.0f, ArcHeight);
 
     if (!VisualAnimation.IsNull())
     {
@@ -1008,6 +1037,7 @@ void AAFCharacter::StartTraversalMove(
     bUseControllerRotationYaw = false;
 
     OnTraversalStateChanged(TraversalState);
+    return true;
 }
 
 void AAFCharacter::EnterLedgeHang(
@@ -1029,11 +1059,13 @@ void AAFCharacter::EnterLedgeHang(
     HangLocation.Z =
         TopHit.ImpactPoint.Z - FMath::Max(10.0f, HangBodyDrop);
 
-    if (!CanOccupyCapsuleAt(HangLocation))
+    if (!CanOccupyCapsuleAt(HangLocation) ||
+        !CanMoveCapsuleBetween(GetActorLocation(), HangLocation))
     {
         return;
     }
 
+    SaveTraversalMovementSettings();
     StopAiming();
     StopPrimaryFire();
     RestoreLocomotionAnimationBlueprint();
@@ -1056,12 +1088,13 @@ void AAFCharacter::EnterLedgeHang(
     HangRotation.Pitch = 0.f;
     HangRotation.Roll = 0.f;
 
-    SetActorLocationAndRotation(
-        HangLocation,
-        HangRotation,
-        false,
-        nullptr,
-        ETeleportType::None);
+    FHitResult HangMoveHit;
+    SetActorLocationAndRotation(HangLocation, HangRotation, true, &HangMoveHit);
+    if (HangMoveHit.bBlockingHit || HangMoveHit.bStartPenetrating)
+    {
+        EndTraversalMove(false);
+        return;
+    }
 
     bUseControllerRotationYaw = false;
 
@@ -1099,8 +1132,6 @@ void AAFCharacter::EnterLedgeHang(
 
 void AAFCharacter::ClimbFromLedge()
 {
-    GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
-
     if (TraversalState != EAFTraversalState::Hanging ||
         !GetCapsuleComponent())
     {
@@ -1132,7 +1163,14 @@ void AAFCharacter::ClimbFromLedge()
         Candidate.Z =
             HangingLedgeTop.Z + HalfHeight + 3.0f;
 
-        if (CanOccupyCapsuleAt(Candidate))
+        FCollisionQueryParams Params(SCENE_QUERY_STAT(AFClimbSupport), false, this);
+        Params.AddIgnoredActor(EquippedWeapon);
+        FHitResult Support;
+        const FVector SurfacePoint(Candidate.X, Candidate.Y, HangingLedgeTop.Z);
+        if (GetWorld()->LineTraceSingleByChannel(Support,
+                SurfacePoint + FVector(0.f, 0.f, 15.f),
+                SurfacePoint - FVector(0.f, 0.f, 15.f), ECC_Visibility, Params) &&
+            GetCharacterMovement()->IsWalkable(Support) && CanOccupyCapsuleAt(Candidate))
         {
             Target = Candidate;
             bFoundClimbTarget = true;
@@ -1157,40 +1195,80 @@ void AAFCharacter::ClimbFromLedge()
         Target,
         TargetRotation,
         MantleDuration,
-        18.0f,
-        !HighClimbAnimation.IsNull()
-            ? HighClimbAnimation
-            : LedgeClimbAnimation);
+        LedgeClimbAnimation,
+        HangingLedgeTop.Z);
 }
 
-void AAFCharacter::FinishTraversalMove()
+FVector AAFCharacter::EvaluateTraversalLocation(float Alpha) const
+{
+    const AFTraversalPath::Progress P = AFTraversalPath::Evaluate(Alpha);
+    FVector Location = FMath::Lerp(TraversalStartLocation, TraversalTargetLocation, P.Forward);
+    Location.Z = FMath::Lerp(TraversalStartLocation.Z, TraversalClearanceZ, P.Rise)
+        + (TraversalTargetLocation.Z - TraversalClearanceZ) * P.Settle;
+    return Location;
+}
+
+bool AAFCharacter::IsTraversalPathClear() const
+{
+    // Each phase is a straight segment, so these three sweeps cover the whole
+    // path even if a frame hitch later skips one of the phase boundaries.
+    const float PhaseEnds[] = {0.35f, 0.75f, 1.0f};
+    FVector Previous = TraversalStartLocation;
+    for (float Alpha : PhaseEnds)
+    {
+        const FVector Next = EvaluateTraversalLocation(Alpha);
+        if (!CanMoveCapsuleBetween(Previous, Next))
+        {
+            return false;
+        }
+        Previous = Next;
+    }
+    return true;
+}
+
+bool AAFCharacter::CanMoveCapsuleBetween(const FVector& From, const FVector& To) const
+{
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(AFTraversalPath), false, this);
+    Params.AddIgnoredActor(EquippedWeapon);
+    FHitResult Hit;
+    return !GetWorld()->SweepSingleByChannel(Hit, From, To, FQuat::Identity,
+        GetCapsuleComponent()->GetCollisionObjectType(),
+        FCollisionShape::MakeCapsule(GetCapsuleComponent()->GetScaledCapsuleRadius(),
+                                    GetCapsuleComponent()->GetScaledCapsuleHalfHeight()),
+        Params, FCollisionResponseParams(GetCapsuleComponent()->GetCollisionResponseToChannels()));
+}
+
+void AAFCharacter::SaveTraversalMovementSettings()
+{
+    if (TraversalState == EAFTraversalState::None)
+    {
+        TraversalSavedGravity = GetCharacterMovement()->GravityScale;
+        TraversalSavedOrientToMovement = bIsAiming
+            ? bPreviousOrientRotationToMovement : GetCharacterMovement()->bOrientRotationToMovement;
+        TraversalSavedControllerYaw = bIsAiming ? bPreviousControllerYaw : bUseControllerRotationYaw;
+    }
+}
+
+void AAFCharacter::EndTraversalMove(bool bCompleted)
 {
     GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
-
-    SetActorLocationAndRotation(
-        TraversalTargetLocation,
-        TraversalTargetRotation,
-        false,
-        nullptr,
-        ETeleportType::None);
-
+    // Never teleport to a target after a blocked sweep.
     TraversalState = EAFTraversalState::None;
     TraversalAlpha = 0.0f;
-
     if (GetCharacterMovement())
     {
-        GetCharacterMovement()->GravityScale = 1.0f;
-        GetCharacterMovement()->SetMovementMode(MOVE_Walking);
-        GetCharacterMovement()->bOrientRotationToMovement = !bIsAiming;
+        GetCharacterMovement()->GravityScale = TraversalSavedGravity;
+        GetCharacterMovement()->bOrientRotationToMovement = TraversalSavedOrientToMovement;
+        GetCharacterMovement()->StopMovementImmediately();
+        // Let movement find the actual floor, including after an interrupted climb.
+        GetCharacterMovement()->SetMovementMode(MOVE_Falling);
     }
-
-    bUseControllerRotationYaw = bIsAiming;
-
+    bUseControllerRotationYaw = TraversalSavedControllerYaw;
     HangingWallNormal = FVector::ZeroVector;
     HangingLedgeTop = FVector::ZeroVector;
     RestoreLocomotionAnimationBlueprint();
     SetTraversalWeaponStowed(false);
-
+    LedgeGrabScanCooldown = bCompleted ? 0.2f : 0.5f;
     OnTraversalStateChanged(TraversalState);
 }
 
@@ -1376,6 +1454,22 @@ bool AAFCharacter::PlayFullBodySequence(
         SavedLocomotionAnimClass = GetMesh()->GetAnimClass();
     }
 
+    if (UAnimSequence* SourceSequence = Cast<UAnimSequence>(LoadedSequence))
+    {
+        // Keep source assets untouched: other characters/ABPs may need their root motion.
+        TObjectPtr<UAnimSequence>& Playback = InPlaceSequences.FindOrAdd(SourceSequence);
+        if (!Playback)
+        {
+            Playback = DuplicateObject<UAnimSequence>(SourceSequence, this);
+            Playback->ClearFlags(RF_Public | RF_Standalone);
+            Playback->SetFlags(RF_Transient);
+            Playback->bEnableRootMotion = true;
+            Playback->bForceRootLock = true;
+            Playback->RootMotionRootLock = ERootMotionRootLock::AnimFirstFrame;
+        }
+        LoadedSequence = Playback;
+    }
+
     GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
     GetMesh()->PlayAnimation(LoadedSequence, bLoop);
 
@@ -1384,6 +1478,7 @@ bool AAFCharacter::PlayFullBodySequence(
     {
         const float ResolvedPlayRate =
             PlayRate > 0.0f ? PlayRate : JumpVisualPlayRate;
+        SingleNode->SetRootMotionMode(ERootMotionMode::IgnoreRootMotion);
         SingleNode->SetPlayRate(FMath::Max(0.1f, ResolvedPlayRate));
     }
 
@@ -1429,6 +1524,11 @@ void AAFCharacter::PauseTraversalVisualForHang()
     {
         // Hold the authored grab pose instead of falling back to locomotion
         // while the character is attached to the ledge.
+        if (UAnimSequenceBase* Sequence = Cast<UAnimSequenceBase>(SingleNode->GetCurrentAsset()))
+        {
+            SingleNode->SetPosition(Sequence->GetPlayLength() *
+                FMath::Clamp(HangPoseFreezeFraction, 0.1f, 0.98f), false);
+        }
         SingleNode->SetPlaying(false);
     }
 }

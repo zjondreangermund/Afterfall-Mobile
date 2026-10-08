@@ -10,6 +10,7 @@ class UAFHealthComponent;
 class UAFInventoryComponent;
 class AAFWeaponBase;
 class UAnimSequenceBase;
+class UAnimSequence;
 class UAnimInstance;
 
 UENUM(BlueprintType)
@@ -29,6 +30,7 @@ class AFTERFALLMOBILE_API AAFCharacter : public ACharacter
 public:
     AAFCharacter();
     virtual void Tick(float DeltaSeconds) override;
+    virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
     virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
     UFUNCTION(BlueprintCallable, Category="Afterfall|Combat")
@@ -301,7 +303,14 @@ private:
     FRotator TraversalTargetRotation = FRotator::ZeroRotator;
     float TraversalElapsed = 0.f;
     float TraversalDurationActive = 0.5f;
-    float TraversalArcHeight = 0.f;
+    float TraversalClearanceZ = 0.f;
+    float TraversalSavedGravity = 1.f;
+    bool TraversalSavedOrientToMovement = true;
+    bool TraversalSavedControllerYaw = false;
+    bool bSavedOwnerNoSee = false;
+
+    UPROPERTY(Transient)
+    TMap<TObjectPtr<UAnimSequence>, TObjectPtr<UAnimSequence>> InPlaceSequences;
 
     FVector HangingWallNormal = FVector::ZeroVector;
     FVector HangingLedgeTop = FVector::ZeroVector;
@@ -340,20 +349,25 @@ private:
         float& OutObstacleHeight) const;
     bool FindVaultLanding(
         const FHitResult& WallHit,
+        const FHitResult& TopHit,
         FVector& OutLandingLocation) const;
     bool CanOccupyCapsuleAt(const FVector& WorldLocation) const;
-    void StartTraversalMove(
+    bool StartTraversalMove(
         EAFTraversalState NewState,
         const FVector& TargetLocation,
         const FRotator& TargetRotation,
         float Duration,
-        float ArcHeight,
-        TSoftObjectPtr<UAnimSequenceBase> VisualAnimation);
+        TSoftObjectPtr<UAnimSequenceBase> VisualAnimation,
+        float ObstacleTopZ);
     void EnterLedgeHang(
         const FHitResult& WallHit,
         const FHitResult& TopHit);
     void ClimbFromLedge();
-    void FinishTraversalMove();
+    FVector EvaluateTraversalLocation(float Alpha) const;
+    bool IsTraversalPathClear() const;
+    bool CanMoveCapsuleBetween(const FVector& From, const FVector& To) const;
+    void SaveTraversalMovementSettings();
+    void EndTraversalMove(bool bCompleted);
     void SetTraversalWeaponStowed(bool bStowed);
     bool PlayFullBodySequence(TSoftObjectPtr<UAnimSequenceBase> Sequence, bool bLoop, float PlayRate = -1.0f);
     float ResolveTraversalDuration(TSoftObjectPtr<UAnimSequenceBase> Sequence, float FallbackDuration) const;
