@@ -175,6 +175,34 @@ public:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Jump", meta=(ClampMin="0.1"))
     float JumpVisualPlayRate = 1.0f;
 
+    // Retargeted Game Animation Sample traversal sequences.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
+    TSoftObjectPtr<UAnimSequenceBase> VaultRunAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
+    TSoftObjectPtr<UAnimSequenceBase> VaultWalkAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
+    TSoftObjectPtr<UAnimSequenceBase> HurdleRunAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
+    TSoftObjectPtr<UAnimSequenceBase> MantleLowAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
+    TSoftObjectPtr<UAnimSequenceBase> MantleMediumAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
+    TSoftObjectPtr<UAnimSequenceBase> LedgeCatchAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
+    TSoftObjectPtr<UAnimSequenceBase> LedgeClimbAnimation;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal", meta=(ClampMin="0.1"))
+    float TraversalVisualPlayRate = 1.0f;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal", meta=(ClampMin="0.0"))
+    float HurdleSpeedThreshold = 330.0f;
+
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
     bool bAutoLedgeGrab = true;
 
@@ -304,14 +332,16 @@ private:
         const FVector& TargetLocation,
         const FRotator& TargetRotation,
         float Duration,
-        float ArcHeight);
+        float ArcHeight,
+        TSoftObjectPtr<UAnimSequenceBase> VisualAnimation);
     void EnterLedgeHang(
         const FHitResult& WallHit,
         const FHitResult& TopHit);
     void ClimbFromLedge();
     void FinishTraversalMove();
     void SetTraversalWeaponStowed(bool bStowed);
-    bool PlayFullBodySequence(TSoftObjectPtr<UAnimSequenceBase> Sequence, bool bLoop);
+    bool PlayFullBodySequence(TSoftObjectPtr<UAnimSequenceBase> Sequence, bool bLoop, float PlayRate = -1.0f);
+    float ResolveTraversalDuration(TSoftObjectPtr<UAnimSequenceBase> Sequence, float FallbackDuration) const;
     void SetJumpVisualPhase(EAFJumpVisualPhase NewPhase);
     void UpdateJumpVisual(float DeltaSeconds);
     void RestoreLocomotionAnimationBlueprint();
