@@ -197,6 +197,9 @@ public:
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
     TSoftObjectPtr<UAnimSequenceBase> LedgeClimbAnimation;
 
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal")
+    TSoftObjectPtr<UAnimSequenceBase> HighClimbAnimation;
+
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal", meta=(ClampMin="0.1"))
     float TraversalVisualPlayRate = 1.0f;
 
