@@ -210,7 +210,7 @@ public:
     float HurdleMaxHeight = 72.0f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal|Animation|Traversal", meta=(ClampMin="0.1", ClampMax="0.98"))
-    float HangPoseFreezeFraction = 0.88f;
+    float HangPoseFreezeFraction = 0.92f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal")
     bool bAutoLedgeGrab = true;
@@ -226,6 +226,11 @@ public:
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="80.0"))
     float MantleMaxHeight = 215.f;
+
+    // Obstacles above this are not direct-mantled from the ground. Space
+    // performs a real jump, then the auto ledge grab catches the top.
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="80.0"))
+    float DirectMantleMaxHeight = 145.f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="0.05"))
     float VaultDuration = 0.46f;
@@ -246,7 +251,7 @@ public:
     float LedgeTopMaxRelativeHeight = 145.f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="10.0"))
-    float HangBodyDrop = 72.f;
+    float HangBodyDrop = 102.f;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Afterfall|Traversal", meta=(ClampMin="0.0"))
     float HangShimmySpeed = 115.f;
