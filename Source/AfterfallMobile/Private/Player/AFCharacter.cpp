@@ -430,6 +430,8 @@ void AAFCharacter::TraversalJumpReleased()
 
 void AAFCharacter::DropFromLedge()
 {
+    GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
+
     if (TraversalState != EAFTraversalState::Hanging || !GetCharacterMovement())
     {
         return;
@@ -500,25 +502,45 @@ bool AAFCharacter::TryContextTraversal()
     TargetRotation.Pitch = 0.f;
     TargetRotation.Roll = 0.f;
 
+    const float HorizontalSpeed = GetVelocity().Size2D();
+
+    // The imported Game Animation Sample actions are authored around a
+    // roughly 1 m obstacle. Keep low/fast hurdles separate from normal vaults
+    // instead of treating every short wall as the same action.
     if (ObstacleHeight <= VaultMaxHeight)
     {
         FVector LandingLocation;
         if (FindVaultLanding(WallHit, LandingLocation))
         {
-            const float HorizontalSpeed = GetVelocity().Size2D();
-            TSoftObjectPtr<UAnimSequenceBase> VaultVisual =
-                HorizontalSpeed >= HurdleSpeedThreshold
-                    ? HurdleRunAnimation
-                    : (HorizontalSpeed >= 140.0f
-                        ? VaultRunAnimation
-                        : VaultWalkAnimation);
+            const bool bUseHurdle =
+                ObstacleHeight <= HurdleMaxHeight &&
+                HorizontalSpeed >= HurdleSpeedThreshold;
+
+            TSoftObjectPtr<UAnimSequenceBase> VaultVisual;
+            float ArcHeight = 42.0f;
+
+            if (bUseHurdle)
+            {
+                VaultVisual = HurdleRunAnimation;
+                ArcHeight = 24.0f;
+            }
+            else if (HorizontalSpeed >= 185.0f)
+            {
+                VaultVisual = VaultRunAnimation;
+                ArcHeight = 38.0f;
+            }
+            else
+            {
+                VaultVisual = VaultWalkAnimation;
+                ArcHeight = 32.0f;
+            }
 
             StartTraversalMove(
                 EAFTraversalState::Vaulting,
                 LandingLocation,
                 TargetRotation,
                 VaultDuration,
-                FMath::Max(85.0f, ObstacleHeight + 45.0f),
+                ArcHeight,
                 VaultVisual);
             return true;
         }
@@ -527,27 +549,33 @@ bool AAFCharacter::TryContextTraversal()
     const float CapsuleRadius = GetCapsuleComponent()->GetScaledCapsuleRadius();
     const float CapsuleHalfHeight = GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
 
+    // Put the capsule clearly onto the top surface. The old target barely
+    // crossed the wall edge, which made the body animation appear to climb
+    // through or beside the obstacle.
     FVector MantleTarget = TopHit.ImpactPoint;
-    MantleTarget -= WallHit.ImpactNormal.GetSafeNormal2D() * (CapsuleRadius * 0.45f);
-    MantleTarget.Z = TopHit.ImpactPoint.Z + CapsuleHalfHeight + 2.0f;
+    MantleTarget -= WallHit.ImpactNormal.GetSafeNormal2D() * (CapsuleRadius + 24.0f);
+    MantleTarget.Z = TopHit.ImpactPoint.Z + CapsuleHalfHeight + 3.0f;
 
     if (!CanOccupyCapsuleAt(MantleTarget))
     {
         return false;
     }
 
+    // These Mantle_1_0 assets are approach variants (stand/walk/run), not
+    // different wall heights. Select by approach speed; the actor path handles
+    // the actual detected wall height.
     TSoftObjectPtr<UAnimSequenceBase> MantleVisual;
-    if (ObstacleHeight >= 165.0f)
+    if (HorizontalSpeed >= 230.0f)
     {
-        MantleVisual = HighClimbAnimation;
+        MantleVisual = MantleMediumAnimation; // run variant
     }
-    else if (ObstacleHeight >= 115.0f || GetVelocity().Size2D() >= 220.0f)
+    else if (HorizontalSpeed >= 70.0f)
     {
-        MantleVisual = MantleMediumAnimation;
+        MantleVisual = MantleLowAnimation; // walk variant
     }
     else
     {
-        MantleVisual = MantleLowAnimation;
+        MantleVisual = LedgeClimbAnimation; // stand variant
     }
 
     StartTraversalMove(
@@ -555,7 +583,7 @@ bool AAFCharacter::TryContextTraversal()
         MantleTarget,
         TargetRotation,
         MantleDuration,
-        38.0f,
+        12.0f,
         MantleVisual);
 
     return true;
@@ -577,20 +605,35 @@ void AAFCharacter::UpdateTraversal(float DeltaSeconds)
         1.f);
     TraversalAlpha = Alpha;
 
-    const FVector MidPoint =
-        (TraversalStartLocation + TraversalTargetLocation) * 0.5f
-        + FVector(0.0f, 0.0f, TraversalArcHeight);
+    // The visual animation and the capsule must follow the same kind of move.
+    // Vaults travel forward in a low arc. Mantles primarily rise onto the
+    // ledge instead of following the old large symmetric jump parabola.
+    const float MoveAlpha =
+        FMath::SmoothStep(0.0f, 1.0f, Alpha);
 
-    const float OneMinus = 1.0f - Alpha;
-    const FVector NewLocation =
-        OneMinus * OneMinus * TraversalStartLocation
-        + 2.0f * OneMinus * Alpha * MidPoint
-        + Alpha * Alpha * TraversalTargetLocation;
+    FVector NewLocation =
+        FMath::Lerp(
+            TraversalStartLocation,
+            TraversalTargetLocation,
+            MoveAlpha);
+
+    if (TraversalState == EAFTraversalState::Vaulting)
+    {
+        NewLocation.Z +=
+            FMath::Sin(Alpha * PI) * TraversalArcHeight;
+    }
+    else
+    {
+        // Small lift only. The target location already contains the wall-top
+        // elevation, so a huge extra arc makes hands/feet miss the obstacle.
+        NewLocation.Z +=
+            FMath::Sin(Alpha * PI) * TraversalArcHeight;
+    }
 
     const FRotator NewRotation = FMath::Lerp(
         TraversalStartRotation,
         TraversalTargetRotation,
-        Alpha);
+        MoveAlpha);
 
     SetActorLocationAndRotation(
         NewLocation,
@@ -1014,12 +1057,33 @@ void AAFCharacter::EnterLedgeHang(
 
     bUseControllerRotationYaw = false;
 
-    if (!LedgeCatchAnimation.IsNull())
-    {
+    // The 2.5 m climb-start sequence is the closest match to an actual
+    // jump-to-ledge grab. Use the catch animation as a fallback.
+    TSoftObjectPtr<UAnimSequenceBase> HangVisual =
+        !HighClimbAnimation.IsNull()
+            ? HighClimbAnimation
+            : LedgeCatchAnimation;
+
+    if (!HangVisual.IsNull() &&
         PlayFullBodySequence(
-            LedgeCatchAnimation,
+            HangVisual,
             false,
-            TraversalVisualPlayRate);
+            TraversalVisualPlayRate))
+    {
+        if (UAnimSequenceBase* HangSequence = HangVisual.LoadSynchronous())
+        {
+            const float PauseDelay =
+                (HangSequence->GetPlayLength() /
+                    FMath::Max(0.1f, TraversalVisualPlayRate)) *
+                FMath::Clamp(HangPoseFreezeFraction, 0.1f, 0.98f);
+
+            GetWorldTimerManager().SetTimer(
+                TraversalPoseTimer,
+                this,
+                &AAFCharacter::PauseTraversalVisualForHang,
+                FMath::Max(0.05f, PauseDelay),
+                false);
+        }
     }
 
     OnTraversalStateChanged(TraversalState);
@@ -1027,6 +1091,8 @@ void AAFCharacter::EnterLedgeHang(
 
 void AAFCharacter::ClimbFromLedge()
 {
+    GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
+
     if (TraversalState != EAFTraversalState::Hanging ||
         !GetCapsuleComponent())
     {
@@ -1089,6 +1155,8 @@ void AAFCharacter::ClimbFromLedge()
 
 void AAFCharacter::FinishTraversalMove()
 {
+    GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
+
     SetActorLocationAndRotation(
         TraversalTargetLocation,
         TraversalTargetRotation,
@@ -1290,6 +1358,7 @@ bool AAFCharacter::PlayFullBodySequence(
     if (GetWorld())
     {
         GetWorldTimerManager().ClearTimer(JumpVisualTimer);
+        GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
     }
 
     if (!SavedLocomotionAnimClass)
@@ -1317,6 +1386,7 @@ void AAFCharacter::RestoreLocomotionAnimationBlueprint()
     if (GetWorld())
     {
         GetWorldTimerManager().ClearTimer(JumpVisualTimer);
+        GetWorldTimerManager().ClearTimer(TraversalPoseTimer);
     }
 
     if (GetMesh())
@@ -1335,6 +1405,22 @@ void AAFCharacter::RestoreLocomotionAnimationBlueprint()
     bFallLoopVisualActive = false;
     JumpVisualPhase = EAFJumpVisualPhase::None;
     JumpVisualPhaseElapsed = 0.0f;
+}
+
+void AAFCharacter::PauseTraversalVisualForHang()
+{
+    if (TraversalState != EAFTraversalState::Hanging || !GetMesh())
+    {
+        return;
+    }
+
+    if (UAnimSingleNodeInstance* SingleNode =
+        GetMesh()->GetSingleNodeInstance())
+    {
+        // Hold the authored grab pose instead of falling back to locomotion
+        // while the character is attached to the ledge.
+        SingleNode->SetPlaying(false);
+    }
 }
 
 void AAFCharacter::SetTraversalWeaponStowed(bool bStowed)
