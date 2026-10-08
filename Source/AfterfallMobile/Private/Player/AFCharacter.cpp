@@ -956,11 +956,6 @@ void AAFCharacter::StartTraversalMove(
     GetCharacterMovement()->bOrientRotationToMovement = false;
     bUseControllerRotationYaw = false;
 
-    if (!LedgeCatchAnimation.IsNull())
-    {
-        PlayFullBodySequence(LedgeCatchAnimation, false, TraversalVisualPlayRate);
-    }
-
     OnTraversalStateChanged(TraversalState);
 }
 
@@ -1018,6 +1013,14 @@ void AAFCharacter::EnterLedgeHang(
         ETeleportType::None);
 
     bUseControllerRotationYaw = false;
+
+    if (!LedgeCatchAnimation.IsNull())
+    {
+        PlayFullBodySequence(
+            LedgeCatchAnimation,
+            false,
+            TraversalVisualPlayRate);
+    }
 
     OnTraversalStateChanged(TraversalState);
 }
