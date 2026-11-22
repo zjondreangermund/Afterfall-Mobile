@@ -2,6 +2,10 @@
 
 Original third-person mobile extraction shooter prototype built for Unreal Engine 5.8.3.
 
+## Blackout Extraction direction
+
+Development now starts with the mobile solo extraction concept: scarce power opens valuable loot routes and powers escape, while machinery attracts danger. See [mobile-first scope and setup](Docs/BLACKOUT_MOBILE_FIRST.md) for the first mission, implemented power foundation and remaining device-validation steps.
+
 > **Development codename only:** AFTERFALL. The final commercial title will be changed before release.
 
 ## V0.1 goal

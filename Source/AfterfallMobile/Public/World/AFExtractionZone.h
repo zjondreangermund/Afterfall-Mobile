@@ -5,6 +5,7 @@
 #include "AFExtractionZone.generated.h"
 
 class UBoxComponent;
+class UAFPowerCircuitComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FAFExtractionComplete, AActor*, ExtractedActor);
 
@@ -18,6 +19,13 @@ public:
 
     UPROPERTY(BlueprintAssignable, Category="Afterfall|Extraction")
     FAFExtractionComplete OnExtractionComplete;
+
+    /** Optional circuit actor. When assigned, the named consumer must remain powered. */
+    UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category="Afterfall|Power")
+    TObjectPtr<AActor> PowerCircuitActor;
+
+    UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Afterfall|Power")
+    FName PowerConsumer = TEXT("ExtractionLift");
 
 protected:
     virtual void BeginPlay() override;
@@ -51,4 +59,8 @@ private:
         int32 OtherBodyIndex);
 
     void CompleteExtraction();
+    bool HasExtractionPower() const;
+
+    UFUNCTION()
+    void HandleCircuitChanged();
 };
