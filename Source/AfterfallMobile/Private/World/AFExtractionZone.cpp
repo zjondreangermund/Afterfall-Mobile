@@ -1,6 +1,7 @@
 #include "World/AFExtractionZone.h"
 
 #include "Components/BoxComponent.h"
+#include "Components/AFPowerCircuitComponent.h"
 #include "GameFramework/Character.h"
 #include "TimerManager.h"
 
@@ -20,6 +21,13 @@ void AAFExtractionZone::BeginPlay()
 
     ExtractionVolume->OnComponentBeginOverlap.AddDynamic(this, &AAFExtractionZone::HandleBeginOverlap);
     ExtractionVolume->OnComponentEndOverlap.AddDynamic(this, &AAFExtractionZone::HandleEndOverlap);
+    if (PowerCircuitActor)
+    {
+        if (auto* Circuit = PowerCircuitActor->FindComponentByClass<UAFPowerCircuitComponent>())
+        {
+            Circuit->OnCircuitChanged.AddDynamic(this, &AAFExtractionZone::HandleCircuitChanged);
+        }
+    }
 }
 
 void AAFExtractionZone::HandleBeginOverlap(
@@ -30,7 +38,8 @@ void AAFExtractionZone::HandleBeginOverlap(
     bool bFromSweep,
     const FHitResult& SweepResult)
 {
-    if (!OtherActor || !OtherActor->IsA<ACharacter>())
+    const ACharacter* Character = Cast<ACharacter>(OtherActor);
+    if (!Character || !Character->IsPlayerControlled() || CurrentActor || !HasExtractionPower())
     {
         return;
     }
@@ -61,12 +70,33 @@ void AAFExtractionZone::HandleEndOverlap(
 
 void AAFExtractionZone::CompleteExtraction()
 {
-    if (!CurrentActor)
+    if (!IsValid(CurrentActor) || !HasExtractionPower())
     {
+        CurrentActor = nullptr;
         return;
     }
 
     AActor* ExtractedActor = CurrentActor;
     CurrentActor = nullptr;
     OnExtractionComplete.Broadcast(ExtractedActor);
+}
+
+bool AAFExtractionZone::HasExtractionPower() const
+{
+    if (!PowerCircuitActor)
+    {
+        return true;
+    }
+    const auto* Circuit = PowerCircuitActor->FindComponentByClass<UAFPowerCircuitComponent>();
+    return Circuit && Circuit->IsConsumerPowered(PowerConsumer);
+}
+
+void AAFExtractionZone::HandleCircuitChanged()
+{
+    if (!HasExtractionPower())
+    {
+        GetWorldTimerManager().ClearTimer(ExtractionTimer);
+        CurrentActor = nullptr;
+    }
+    // Restoring power requires leaving and re-entering the volume to start a fresh countdown.
 }
